@@ -5,57 +5,41 @@ import (
 	"container/list"
 	"context"
 	"fmt"
-	"frontier/netpoll"
-	"github.com/golang/glog"
+	"github.com/GaoShou012/frontier/netpoll"
+	"github.com/GaoShou012/tools/ider"
+	"github.com/GaoShou012/tools/logger"
 	"net"
 	"runtime"
 	"sync"
 	"time"
 )
 
-const (
-	LogLevelClose = iota
-	LogLevelError
-	LogLevelWarning
-	LogLevelInfo
-	LogLevelAll
-)
-
-type Frontier struct {
-	Id               string
+type DynamicParams struct {
+	// 日志级别
+	LogLevel int
+	// 心跳超时
 	HeartbeatTimeout int64
-	Protocol         Protocol
-	Handler          Handler
-
 	// 写缓存大小，读缓存大小
 	WriterBufferSize int
 	ReaderBufferSize int
+	// 写超时，读超时
+	WriterTimeout time.Duration
+	ReaderTimeout time.Duration
+}
 
-	// 支持在线实时变更的参数
-	// 写超时，读超时，日志级别
-	WriterTimeout *time.Duration
-	ReaderTimeout *time.Duration
-	LogLevel      *int
+type Frontier struct {
+	Id             string
+	Addr           string
+	MaxConnections int
+	DynamicParams  *DynamicParams
+	Handler        *Handler
+	Protocol       Protocol
 
-	ider *ider
-	ln   net.Listener
-
-	// poller
+	ider   *ider.IdPool
+	ln     net.Listener
 	desc   *netpoll.Desc
 	poller netpoll.Poller
-
 	sender *sender
-
-	// conn event's handler
-	// insert,update,delete
-	event struct {
-		procNum     int
-		timestamp   int64
-		pool        sync.Pool
-		anchor      map[int]*list.Element
-		connections []*list.List
-		cache       []chan *connEvent
-	}
 
 	// 打开连接
 	onOpenCache chan *conn
@@ -66,20 +50,26 @@ type Frontier struct {
 		pool  sync.Pool
 		cache chan *Message
 	}
+	// 连接事件处理程序，接入，更新，断开
+	event struct {
+		procNum     int
+		timestamp   int64
+		pool        sync.Pool
+		anchor      map[int]*list.Element
+		connections []*list.List
+		cache       []chan *connEvent
+	}
 }
 
-func (f *Frontier) Init(ctx context.Context, addr string, maxConnections int) error {
-	f.Protocol.OnInit(
-		f.WriterBufferSize,
-		f.ReaderBufferSize,
-		f.WriterTimeout,
-		f.ReaderTimeout,
-		f.LogLevel,
-	)
-	f.ider.init(maxConnections)
+func (f *Frontier) Init() error {
+	f.Protocol.OnInit(f.DynamicParams, f.Handler)
+
+	// init ider
+	f.ider = &ider.IdPool{}
+	f.ider.Init(f.MaxConnections)
 
 	// init tcp listener
-	ln, err := (&net.ListenConfig{KeepAlive: time.Second * 60}).Listen(ctx, "tcp", addr)
+	ln, err := (&net.ListenConfig{KeepAlive: time.Second * 60}).Listen(context.TODO(), "tcp", f.Addr)
 	if err != nil {
 		return err
 	}
@@ -96,12 +86,9 @@ func (f *Frontier) Init(ctx context.Context, addr string, maxConnections int) er
 
 	// init sender
 	f.sender = &sender{}
-	f.sender.init(4, 100000, f.LogLevel)
+	f.sender.init(2, 100000, f.DynamicParams)
 
-	// 事件处理者
-	// 事件会存在异步情况
 	f.eventHandler()
-
 	f.onOpen(runtime.NumCPU()*10, 100000)
 	f.onRecv(100000)
 	f.onHandle(100000)
@@ -110,17 +97,23 @@ func (f *Frontier) Init(ctx context.Context, addr string, maxConnections int) er
 }
 
 func (f *Frontier) Start() error {
+	fmt.Println("**********************************************************************************************")
+	fmt.Println("ID:", f.Id)
+	fmt.Println("监听地址:", f.Addr)
+	fmt.Println("最大连接数量:", f.MaxConnections)
+	fmt.Println("**********************************************************************************************")
+
 	return f.poller.Start(f.desc, func(event netpoll.Event) {
 		var err error
 		defer func() {
 			if err := f.poller.Resume(f.desc); err != nil {
-				glog.Errorln(err)
+				logger.Println(logger.LogError, err)
 			}
 		}()
 
 		netConn, err := f.ln.Accept()
 		if err != nil {
-			glog.Errorln("accept error:", err)
+			logger.Println(logger.LogError, "To accept error:", err)
 			return
 		}
 		defer func() {
@@ -128,24 +121,21 @@ func (f *Frontier) Start() error {
 				netConn.Close()
 			}
 		}()
+		if f.DynamicParams.LogLevel >= logger.LogInfo {
+			logger.Println(logger.LogInfo, "New connection:", netConn.RemoteAddr().String())
+		}
 
-		id, err := f.ider.get()
+		id, err := f.ider.Get()
 		if err != nil {
-			glog.Errorln(err)
+			logger.Println(logger.LogError, err)
 			return
 		}
 		defer func() {
 			if err != nil {
-				f.ider.put(id)
+				f.ider.Put(id)
 			}
 		}()
 
-		err = f.Protocol.OnAccept(netConn)
-		if err != nil {
-			return
-		}
-
-		desc := netpoll.Must(netpoll.HandleRead(netConn))
 		conn := &conn{
 			frontier:       f,
 			protocol:       f.Protocol,
@@ -155,8 +145,14 @@ func (f *Frontier) Start() error {
 			context:        nil,
 			connectionTime: time.Now(),
 			deadline:       0,
-			desc:           desc,
+			desc:           nil,
 		}
+		err = f.Protocol.OnAccept(conn)
+		if err != nil {
+			return
+		}
+		desc := netpoll.Must(netpoll.HandleRead(netConn))
+		conn.desc = desc
 
 		f.onOpenCache <- conn
 	})
@@ -176,12 +172,21 @@ func (f *Frontier) onOpen(procNum int, size int) {
 			for {
 				conn := <-f.onOpenCache
 
-				if f.Handler.OnOpen(conn) == false {
-					if err := conn.NetConn().Close(); err != nil && *f.LogLevel >= LogLevelWarning {
-						glog.Warningln(err)
+				if f.Handler.OnOpen != nil {
+					if err := f.Handler.OnOpen(conn); err != nil {
+						logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
+
+						if err := conn.protocol.OnClose(conn.netConn); err != nil {
+							logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
+						}
+						if err := conn.NetConn().Close(); err != nil {
+							logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
+						}
+						f.ider.Put(conn.id)
+						continue
 					}
-					f.ider.put(conn.id)
-					continue
+				} else {
+					logger.Compare(logger.LogInfo, f.DynamicParams.LogLevel, "The handler has no OnOpen program")
 				}
 
 				f.onRecvCache <- conn
@@ -207,20 +212,24 @@ func (f *Frontier) onRecv(size int) {
 					go func() {
 						data, err := conn.protocol.Reader(conn.netConn)
 						if err != nil {
-							if *f.LogLevel >= LogLevelWarning {
-								glog.Infoln(err)
+							if f.DynamicParams.LogLevel >= logger.LogWarning {
+								logger.Println(logger.LogWarning, err)
 							}
-							f.Handler.OnClose(conn)
-							if err := f.Protocol.OnClose(conn.netConn); err != nil && *f.LogLevel >= LogLevelWarning {
-								glog.Infoln(err)
+							if f.Handler.OnClose != nil {
+								f.Handler.OnClose(conn)
+							} else {
+								logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnClose program")
 							}
-							if err := conn.netConn.Close(); err != nil && *f.LogLevel >= LogLevelWarning {
-								glog.Infoln(err)
+							if err := f.Protocol.OnClose(conn.netConn); err != nil {
+								logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
 							}
-							if err := f.poller.Stop(conn.desc); err != nil && *f.LogLevel >= LogLevelWarning {
-								glog.Infoln(err)
+							if err := conn.netConn.Close(); err != nil {
+								logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
 							}
-							f.ider.put(conn.id)
+							if err := f.poller.Stop(conn.desc); err != nil {
+								logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
+							}
+							f.ider.Put(conn.id)
 							f.eventPush(ConnEventTypeDelete, conn)
 						}
 						if bytes.Equal(data, []byte("ping")) {
@@ -248,7 +257,11 @@ func (f *Frontier) onHandle(size int) {
 			for {
 				message := <-f.onMessageHandle.cache
 				conn, data := message.conn, message.data
-				f.Handler.OnMessage(conn, data)
+				if f.Handler.OnMessage != nil {
+					f.Handler.OnMessage(conn, data)
+				} else {
+					logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnMessage program")
+				}
 				f.onMessageHandle.pool.Put(message)
 			}
 		}()
@@ -257,12 +270,12 @@ func (f *Frontier) onHandle(size int) {
 
 func (f *Frontier) eventPush(evt int, conn *conn) {
 	if evt == ConnEventTypeInsert {
-		conn.deadline = f.event.timestamp + f.HeartbeatTimeout
+		conn.deadline = f.event.timestamp + f.DynamicParams.HeartbeatTimeout
 	} else if evt == ConnEventTypeUpdate {
 		if (conn.deadline - f.event.timestamp) < 5 {
 			return
 		}
-		conn.deadline = f.event.timestamp + f.HeartbeatTimeout
+		conn.deadline = f.event.timestamp + f.DynamicParams.HeartbeatTimeout
 	}
 
 	event := f.event.pool.Get().(*connEvent)
@@ -300,7 +313,7 @@ func (f *Frontier) eventHandler() {
 			for {
 				select {
 				case now := <-tick.C:
-					if f.HeartbeatTimeout <= 0 {
+					if f.DynamicParams.HeartbeatTimeout <= 0 {
 						return
 					}
 					deadline := now.Unix()
@@ -314,17 +327,21 @@ func (f *Frontier) eventHandler() {
 						if conn.deadline > deadline {
 							break
 						}
-						if *f.LogLevel >= LogLevelInfo {
-							glog.Infof("服务端关闭超时连接 %d %s\n", conn.id, conn.netConn.RemoteAddr().String())
+						if f.DynamicParams.LogLevel >= logger.LogInfo {
+							logger.Println(logger.LogInfo, "To close timeout connection:", conn.id, conn.netConn.RemoteAddr().String())
 						}
-						f.Handler.OnClose(conn)
-						if err := f.Protocol.OnClose(conn.netConn); err != nil && *f.LogLevel >= LogLevelWarning {
-							glog.Warningln(err)
+						if f.Handler.OnClose != nil {
+							f.Handler.OnClose(conn)
+						} else {
+							logger.Compare(logger.LogInfo, f.DynamicParams.LogLevel, "The handler has no OnClose program")
 						}
-						if err := f.poller.Stop(conn.desc); err != nil && *f.LogLevel >= LogLevelWarning {
-							glog.Warningln(err)
+						if err := f.Protocol.OnClose(conn.netConn); err != nil {
+							logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
 						}
-						f.ider.put(conn.id)
+						if err := f.poller.Stop(conn.desc); err != nil {
+							logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
+						}
+						f.ider.Put(conn.id)
 
 						connId := conn.id
 						conn.state = connStateWasClosed
@@ -359,7 +376,7 @@ func (f *Frontier) eventHandler() {
 						anchor, ok := f.event.anchor[connId]
 
 						if !ok {
-							panic(fmt.Sprintf("delete the conn id is not exists %d\n", connId))
+							panic(fmt.Sprintf("To delete the conn id is not exists %d\n", connId))
 						}
 						delete(f.event.anchor, connId)
 						connections.Remove(anchor)
@@ -370,7 +387,7 @@ func (f *Frontier) eventHandler() {
 						}
 						anchor, ok := f.event.anchor[connId]
 						if !ok {
-							panic(fmt.Sprintf("update the conn id is not exists %d\n", connId))
+							panic(fmt.Sprintf("To update the conn id is not exists %d\n", connId))
 						}
 						connections.Remove(anchor)
 						anchor = connections.PushBack(conn)

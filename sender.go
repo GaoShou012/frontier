@@ -1,7 +1,7 @@
 package frontier
 
 import (
-	"github.com/golang/glog"
+	"github.com/GaoShou012/tools/logger"
 	"sync"
 )
 
@@ -12,17 +12,17 @@ type senderJob struct {
 type sender struct {
 	parallel int
 	pool     sync.Pool
-
-	// mod算法区分conn的数据流，保持conn的数据顺序
-	jobs []chan *senderJob
+	jobs     []chan *senderJob
+	params   *DynamicParams
 }
 
-func (s *sender) init(parallel int, cacheSize int, logLevel *int) {
+func (s *sender) init(parallel int, cacheSize int, params *DynamicParams) {
 	s.parallel = parallel
 	s.jobs = make([]chan *senderJob, parallel)
 	s.pool.New = func() interface{} {
 		return new(senderJob)
 	}
+	s.params = params
 	for i := 0; i < parallel; i++ {
 		s.jobs[i] = make(chan *senderJob, cacheSize)
 		go func(i int) {
@@ -30,12 +30,15 @@ func (s *sender) init(parallel int, cacheSize int, logLevel *int) {
 				job := <-s.jobs[i]
 				c, message := job.c, job.message
 				if c.state == connStateIsWorking {
-					if err := c.protocol.Writer(c.netConn, message); err != nil && *logLevel > LogLevelWarning {
-						glog.Warningln(err)
+					err := c.protocol.Writer(c.netConn, message)
+					if err != nil {
+						if s.params.LogLevel >= logger.LogWarning {
+							logger.Println(logger.LogWarning, err)
+						}
 					}
 				} else {
-					if *logLevel > LogLevelWarning {
-						glog.Warningln("连接不是working状态，发送数据失败", c.NetConn().RemoteAddr().String())
+					if s.params.LogLevel >= logger.LogWarning {
+						logger.Println(logger.LogWarning, "To send data failed,the conn is not working", c.NetConn().RemoteAddr().String())
 					}
 				}
 				s.pool.Put(job)
@@ -47,5 +50,6 @@ func (s *sender) init(parallel int, cacheSize int, logLevel *int) {
 func (s *sender) push(c *conn, message []byte) {
 	j := s.pool.Get().(*senderJob)
 	j.c, j.message = c, message
-	s.jobs[j.c.id%s.parallel] <- j
+	index := j.c.id & s.parallel
+	s.jobs[index] <- j
 }

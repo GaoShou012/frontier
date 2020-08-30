@@ -3,9 +3,9 @@
 package netpoll
 
 import (
+	"github.com/GaoShou012/tools/ider"
 	"runtime"
 	"sync"
-	"wchatv1/src/ider"
 
 	"golang.org/x/sys/unix"
 )
@@ -256,8 +256,8 @@ func (ep *Epoll) wait(onError func(error)) {
 
 	// 缓存block
 	idPool := ider.IdPool{}
-	idPool.Init(1000)
-	blocks = make([]block, 1000)
+	idPool.Init(1024)
+	blocks = make([]block, 1024)
 	for i := 0; i < 1000; i++ {
 		blocks[i].events = make([]unix.EpollEvent, maxWaitEventsBegin)
 		blocks[i].callbacks = make([]func(event EpollEvent), 0, maxWaitEventsBegin)
@@ -288,9 +288,7 @@ func (ep *Epoll) wait(onError func(error)) {
 					}
 				}
 
-				if err := idPool.Put(id); err != nil {
-					panic(err)
-				}
+				idPool.Put(id)
 			}
 		}()
 	}
@@ -314,45 +312,6 @@ func (ep *Epoll) wait(onError func(error)) {
 		jobs <- &job{
 			id: id,
 			n:  n,
-		}
-	}
-
-	events := make([]unix.EpollEvent, maxWaitEventsBegin)
-	callbacks := make([]func(EpollEvent), 0, maxWaitEventsBegin)
-	for {
-		n, err := unix.EpollWait(ep.fd, events, -1)
-		if err != nil {
-			if temporaryErr(err) {
-				continue
-			}
-			onError(err)
-			return
-		}
-
-		callbacks = callbacks[:n]
-
-		ep.mu.RLock()
-		for i := 0; i < n; i++ {
-			fd := int(events[i].Fd)
-			if fd == ep.eventFd { // signal to close
-				panic("signal to close")
-				ep.mu.RUnlock()
-				return
-			}
-			callbacks[i] = ep.callbacks[fd]
-		}
-		ep.mu.RUnlock()
-
-		for i := 0; i < n; i++ {
-			if cb := callbacks[i]; cb != nil {
-				cb(EpollEvent(events[i].Events))
-				callbacks[i] = nil
-			}
-		}
-
-		if n == len(events) && n*2 <= maxWaitEventsStop {
-			events = make([]unix.EpollEvent, n*2)
-			callbacks = make([]func(EpollEvent), 0, n*2)
 		}
 	}
 }

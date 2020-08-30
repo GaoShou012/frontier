@@ -1,7 +1,7 @@
 package frontier
 
 import (
-	"frontier/netpoll"
+	"github.com/GaoShou012/frontier/netpoll"
 	"net"
 	"time"
 )
@@ -48,19 +48,15 @@ func (c *conn) GetState() int {
 func (c *conn) GetConnectionTime() time.Time {
 	return c.connectionTime
 }
-
 func (c *conn) SetContext(ctx interface{}) {
 	c.context = ctx
 }
-
 func (c *conn) GetContext() interface{} {
 	return c.context
 }
-
 func (c *conn) NetConn() net.Conn {
 	return c.netConn
 }
-
 func (c *conn) Sender(message []byte) {
 	c.frontier.sender.push(c, message)
 }
