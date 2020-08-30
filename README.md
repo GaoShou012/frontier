@@ -3,6 +3,7 @@ The frontier is a server of Websocket
 
 
 ## 例子
+``` Go
 package main
 
 import (
@@ -75,3 +76,4 @@ func main() {
 		break
 	}
 }
+```
