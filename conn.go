@@ -13,6 +13,7 @@ const (
 )
 
 type Conn interface {
+	Frontier() *Frontier
 	GetId() int
 	GetState() int
 	GetConnectionTime() time.Time
@@ -25,9 +26,6 @@ type Conn interface {
 var _ Conn = &conn{}
 
 type conn struct {
-	frontier *Frontier
-	protocol Protocol
-
 	id    int
 	state int
 
@@ -37,8 +35,13 @@ type conn struct {
 
 	deadline int64
 	desc     *netpoll.Desc
+	frontier *Frontier
+	protocol Protocol
 }
 
+func (c *conn) Frontier() *Frontier {
+	return c.frontier
+}
 func (c *conn) GetId() int {
 	return c.id
 }
