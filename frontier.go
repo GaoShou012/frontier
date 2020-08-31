@@ -226,6 +226,9 @@ func (f *Frontier) onRecv(size int) {
 							if err := conn.netConn.Close(); err != nil {
 								logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
 							}
+							if err := conn.desc.Close(); err != nil {
+								logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
+							}
 							if err := f.poller.Stop(conn.desc); err != nil {
 								logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
 							}
