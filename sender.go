@@ -50,6 +50,6 @@ func (s *sender) init(parallel int, cacheSize int, params *DynamicParams) {
 func (s *sender) push(c *conn, message []byte) {
 	j := s.pool.Get().(*senderJob)
 	j.c, j.message = c, message
-	index := j.c.id & s.parallel
+	index := j.c.id % s.parallel
 	s.jobs[index] <- j
 }

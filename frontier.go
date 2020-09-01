@@ -55,7 +55,7 @@ type Frontier struct {
 		procNum     int
 		timestamp   int64
 		pool        sync.Pool
-		anchor      map[int]*list.Element
+		anchor      []map[int]*list.Element
 		connections []*list.List
 		cache       []chan *connEvent
 	}
@@ -302,13 +302,15 @@ func (f *Frontier) eventHandler() {
 	f.event.pool.New = func() interface{} {
 		return new(connEvent)
 	}
-	f.event.anchor = make(map[int]*list.Element)
+	f.event.anchor = make([]map[int]*list.Element, procNum)
 	f.event.connections = make([]*list.List, procNum)
 	f.event.cache = make([]chan *connEvent, procNum)
 	for i := 0; i < procNum; i++ {
+		f.event.anchor[i] = make(map[int]*list.Element, 100000)
 		f.event.connections[i] = list.New()
-		f.event.cache[i] = make(chan *connEvent, 50000)
+		f.event.cache[i] = make(chan *connEvent, 100000)
 
+		anchors := f.event.anchor[i]
 		connections := f.event.connections[i]
 		events := f.event.cache[i]
 		go func(connections *list.List, events chan *connEvent) {
@@ -318,7 +320,7 @@ func (f *Frontier) eventHandler() {
 				select {
 				case now := <-tick.C:
 					if f.DynamicParams.HeartbeatTimeout <= 0 {
-						return
+						break
 					}
 					deadline := now.Unix()
 					for {
@@ -350,17 +352,18 @@ func (f *Frontier) eventHandler() {
 						connId := conn.id
 						conn.state = connStateWasClosed
 
-						anchor, ok := f.event.anchor[connId]
+						anchor, ok := anchors[connId]
 						if !ok {
 							panic(fmt.Sprintf("The conn id is not exists. %d\n", connId))
 						}
-						delete(f.event.anchor, connId)
+						delete(anchors, connId)
 						connections.Remove(anchor)
 					}
 					break
 				case event, ok := <-events:
 					conn := event.Conn
 					connId := conn.id
+
 					switch event.Type {
 					case ConnEventTypeInsert:
 						if conn.state == connStateIsNothing {
@@ -369,7 +372,7 @@ func (f *Frontier) eventHandler() {
 							break
 						}
 						anchor := connections.PushBack(conn)
-						f.event.anchor[connId] = anchor
+						anchors[connId] = anchor
 						break
 					case ConnEventTypeDelete:
 						if conn.state == connStateIsWorking {
@@ -377,25 +380,27 @@ func (f *Frontier) eventHandler() {
 						} else {
 							break
 						}
-						anchor, ok := f.event.anchor[connId]
+						anchor, ok := anchors[connId]
 
 						if !ok {
 							panic(fmt.Sprintf("To delete the conn id is not exists %d\n", connId))
 						}
-						delete(f.event.anchor, connId)
+						delete(anchors, connId)
 						connections.Remove(anchor)
+
+						f.ider.Put(connId)
 						break
 					case ConnEventTypeUpdate:
 						if conn.state != connStateIsWorking {
 							break
 						}
-						anchor, ok := f.event.anchor[connId]
+						anchor, ok := anchors[connId]
 						if !ok {
 							panic(fmt.Sprintf("To update the conn id is not exists %d\n", connId))
 						}
 						connections.Remove(anchor)
 						anchor = connections.PushBack(conn)
-						f.event.anchor[connId] = anchor
+						anchors[connId] = anchor
 						break
 					}
 
