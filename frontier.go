@@ -234,6 +234,7 @@ func (f *Frontier) onRecv(size int) {
 							}
 							f.ider.Put(conn.id)
 							f.eventPush(ConnEventTypeDelete, conn)
+							return
 						}
 						if bytes.Equal(data, []byte("ping")) {
 							f.eventPush(ConnEventTypeUpdate, conn)
