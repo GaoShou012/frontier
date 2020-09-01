@@ -91,7 +91,7 @@ func (f *Frontier) Init() error {
 	f.eventHandler()
 	f.onOpen(runtime.NumCPU()*10, 100000)
 	f.onRecv(100000)
-	f.onHandle(100000)
+	//f.onHandle(100000)
 
 	return nil
 }
@@ -232,18 +232,18 @@ func (f *Frontier) onRecv(size int) {
 							if err := conn.desc.Close(); err != nil {
 								logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
 							}
-							f.ider.Put(conn.id)
 							f.eventPush(ConnEventTypeDelete, conn)
 							return
 						}
+						f.eventPush(ConnEventTypeUpdate, conn)
 						if bytes.Equal(data, []byte("ping")) {
-							f.eventPush(ConnEventTypeUpdate, conn)
 							return
 						}
-						message := f.onMessageHandle.pool.Get().(*Message)
-						message.conn, message.data = conn, data
-						f.onMessageHandle.cache <- message
-						f.eventPush(ConnEventTypeUpdate, conn)
+						if f.Handler.OnMessage != nil {
+							f.Handler.OnMessage(conn, data)
+						} else {
+							logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnMessage program")
+						}
 					}()
 				})
 			}
@@ -251,34 +251,29 @@ func (f *Frontier) onRecv(size int) {
 	}
 }
 
-func (f *Frontier) onHandle(size int) {
-	f.onMessageHandle.cache = make(chan *Message, size)
-	f.onMessageHandle.pool.New = func() interface{} {
-		return new(Message)
-	}
-	for i := 0; i < runtime.NumCPU(); i++ {
-		go func() {
-			for {
-				message := <-f.onMessageHandle.cache
-				conn, data := message.conn, message.data
-				if f.Handler.OnMessage != nil {
-					f.Handler.OnMessage(conn, data)
-				} else {
-					logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnMessage program")
-				}
-				f.onMessageHandle.pool.Put(message)
-			}
-		}()
-	}
-}
+//func (f *Frontier) onHandle(size int) {
+//	f.onMessageHandle.cache = make(chan *Message, size)
+//	f.onMessageHandle.pool.New = func() interface{} {
+//		return new(Message)
+//	}
+//	for i := 0; i < runtime.NumCPU(); i++ {
+//		go func() {
+//			for {
+//				message := <-f.onMessageHandle.cache
+//				conn, data := message.conn, message.data
+//				if f.Handler.OnMessage != nil {
+//					f.Handler.OnMessage(conn, data)
+//				} else {
+//					logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnMessage program")
+//				}
+//				f.onMessageHandle.pool.Put(message)
+//			}
+//		}()
+//	}
+//}
 
 func (f *Frontier) eventPush(evt int, conn *conn) {
-	if evt == ConnEventTypeInsert {
-		conn.deadline = f.event.timestamp + f.DynamicParams.HeartbeatTimeout
-	} else if evt == ConnEventTypeUpdate {
-		if (conn.deadline - f.event.timestamp) < 5 {
-			return
-		}
+	if evt == ConnEventTypeInsert || evt == ConnEventTypeUpdate {
 		conn.deadline = f.event.timestamp + f.DynamicParams.HeartbeatTimeout
 	}
 
@@ -302,12 +297,12 @@ func (f *Frontier) eventHandler() {
 	f.event.pool.New = func() interface{} {
 		return new(connEvent)
 	}
-	f.event.anchor = make([]map[int]*list.Element, procNum)
 	f.event.connections = make([]*list.List, procNum)
+	f.event.anchor = make([]map[int]*list.Element, procNum)
 	f.event.cache = make([]chan *connEvent, procNum)
 	for i := 0; i < procNum; i++ {
-		f.event.anchor[i] = make(map[int]*list.Element, 100000)
 		f.event.connections[i] = list.New()
+		f.event.anchor[i] = make(map[int]*list.Element, 100000)
 		f.event.cache[i] = make(chan *connEvent, 100000)
 
 		anchors := f.event.anchor[i]

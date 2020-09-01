@@ -254,37 +254,79 @@ func (ep *Epoll) wait(onError func(error)) {
 		close(ep.waitDone)
 	}()
 
-	// 缓存block
-	idPool := ider.IdPool{}
-	idPool.Init(1024)
-	blocks = make([]block, 1024)
-	for i := 0; i < 1000; i++ {
-		blocks[i].events = make([]unix.EpollEvent, maxWaitEventsBegin)
-		blocks[i].callbacks = make([]func(event EpollEvent), 0, maxWaitEventsBegin)
+	events := make([]unix.EpollEvent, maxWaitEventsBegin)
+	callbacks := make([]func(EpollEvent), 0, maxWaitEventsBegin)
+	for {
+		n, err := unix.EpollWait(ep.fd, events, -1)
+		if err != nil {
+			if temporaryErr(err) {
+				continue
+			}
+			onError(err)
+			return
+		}
+
+		callbacks = callbacks[:n]
+
+		ep.mu.RLock()
+		for i := 0; i < n; i++ {
+			fd := int(events[i].Fd)
+			if fd == ep.eventFd { // signal to close
+				panic("signal to close")
+				ep.mu.RUnlock()
+				return
+			}
+			callbacks[i] = ep.callbacks[fd]
+		}
+		ep.mu.RUnlock()
+
+		for i := 0; i < n; i++ {
+			if cb := callbacks[i]; cb != nil {
+				cb(EpollEvent(events[i].Events))
+				callbacks[i] = nil
+			}
+		}
+
+		if n == len(events) && n*2 <= maxWaitEventsStop {
+			events = make([]unix.EpollEvent, n*2)
+			callbacks = make([]func(EpollEvent), 0, n*2)
+		}
 	}
-	jobs = make(chan *job, 10000)
+
+	// 缓存block
+	size := 1024 * 10
+	idPool := ider.IdPool{}
+	idPool.Init(size)
+	blocks = make([]block, size)
+	for i := 0; i < size; i++ {
+		blocks[i] = block{
+			events:    make([]unix.EpollEvent, maxWaitEventsBegin),
+			callbacks: make([]func(event EpollEvent), 0, maxWaitEventsBegin),
+		}
+	}
+	jobs = make(chan *job, size)
 
 	for i := 0; i < runtime.NumCPU(); i++ {
 		go func() {
 			for {
 				job := <-jobs
 				id, n := job.id, job.n
-				blocks[id].callbacks = blocks[id].callbacks[:n]
+				callbacks := blocks[id].callbacks[:n]
 
 				ep.mu.RLock()
 				for i := 0; i < n; i++ {
 					fd := int(blocks[id].events[i].Fd)
-					if fd == ep.eventFd { // signal to close
-						panic("signal to close")
+					if fd == ep.eventFd {
+						panic("epoll signal to close")
 					}
-					blocks[id].callbacks[i] = ep.callbacks[fd]
+					callbacks[i] = ep.callbacks[fd]
 				}
 				ep.mu.RUnlock()
 
 				for i := 0; i < n; i++ {
-					if cb := blocks[id].callbacks[i]; cb != nil {
+					if cb := callbacks[i]; cb != nil {
 						cb(EpollEvent(blocks[id].events[i].Events))
-						blocks[id].callbacks[i] = nil
+						callbacks[i] = nil
 					}
 				}
 
