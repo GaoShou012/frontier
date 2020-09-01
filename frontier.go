@@ -284,7 +284,7 @@ func (f *Frontier) eventPush(evt int, conn *conn) {
 
 	event := f.event.pool.Get().(*connEvent)
 	event.Type, event.Conn = evt, conn
-	blockNum := conn.id & f.event.procNum
+	blockNum := conn.id % f.event.procNum
 	f.event.cache[blockNum] <- event
 }
 func (f *Frontier) eventHandler() {
