@@ -2,12 +2,14 @@ package frontier
 
 import (
 	"errors"
+	"fmt"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 	"github.com/golang/glog"
 	"io"
 	"io/ioutil"
 	"net"
+	"os"
 	"time"
 )
 
@@ -16,11 +18,19 @@ var _ Protocol = &ProtocolWs{}
 type ProtocolWs struct {
 	DynamicParams *DynamicParams
 	Handler       *Handler
+	MessageCount  int
 }
 
 func (p *ProtocolWs) OnInit(params *DynamicParams, handler *Handler) {
 	p.DynamicParams = params
 	p.Handler = handler
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		for {
+			<-ticker.C
+			fmt.Println(p.MessageCount)
+		}
+	}()
 }
 
 func (p *ProtocolWs) OnAccept(conn Conn) error {
@@ -80,7 +90,119 @@ func (p *ProtocolWs) Writer(netConn net.Conn, message []byte) error {
 	}
 	return w.Flush()
 }
-func (p *ProtocolWs) Reader(netConn net.Conn) (message []byte, err error) {
+func (p *ProtocolWs) Reader(conn *conn) (message []byte, err error) {
+	//_,err = ws.ReadFrame(conn.netConn)
+	//if err != nil {
+	//	glog.Errorln(err)
+	//	return
+	//}
+	//fmt.Println(r)
+	//p.MessageCount++
+	header, err := ws.ReadHeader(conn.netConn)
+	if err != nil {
+		glog.Errorln(err)
+		return
+		//	//handle error
+	}
+	if header.Fin {
+		payload := make([]byte, header.Length)
+		_, err = io.ReadFull(conn.netConn, payload)
+		message = append(conn.temp, payload...)
+		p.MessageCount++
+		if string(payload) != "ping" {
+			glog.Errorln(header)
+			glog.Errorln(payload)
+		}
+		return
+	} else {
+		glog.Errorln(header)
+		payload := make([]byte, header.Length)
+		_, err = io.ReadFull(conn.netConn, payload)
+		glog.Errorln(string(payload))
+		os.Exit(1)
+	}
+
+	fmt.Println(header)
+	return
+	//Loop:
+
+	switch header.OpCode {
+	case ws.OpContinuation:
+		//glog.Errorln("continuation")
+		//fmt.Println(header)
+
+		payload := make([]byte, header.Length)
+		_, err = io.ReadFull(conn.netConn, payload)
+		//if err != nil {
+		//	return
+		//}
+		if header.Length == 0 {
+			return
+		}
+		if header.Fin {
+			message = append(conn.temp, payload...)
+			conn.temp = nil
+			p.MessageCount++
+		} else {
+			conn.temp = append(conn.temp, payload...)
+		}
+		break
+	case ws.OpText:
+		//glog.Errorln("optext")
+		//fmt.Println(header)
+		if header.Length != 4 {
+			panic(header)
+		}
+		payload := make([]byte, header.Length)
+		_, err = io.ReadFull(conn.netConn, payload)
+		if err != nil {
+			return
+		}
+		if header.Fin {
+			message = append(conn.temp, payload...)
+			conn.temp = nil
+			p.MessageCount++
+		} else {
+			fmt.Println("not fin", header, payload)
+			conn.temp = append(conn.temp, payload...)
+		}
+
+		//header, err = ws.ReadHeader(conn.netConn)
+		////fmt.Println(header)
+		//if err == nil {
+		//	goto Loop
+		//} else {
+		//	glog.Errorln(err)
+		//	err = nil
+		//}
+		//if err.(syscall.Errno) == unix.EWOULDBLOCK || err.(syscall.Errno) == unix.EAGAIN {
+		//	glog.Errorln("yes syscall.Errno")
+		//	goto Loop
+		//} else {
+		//	err = nil
+		//}
+
+		break
+	case ws.OpBinary:
+		glog.Errorln("opbinary")
+		break
+	case ws.OpClose:
+		glog.Errorln("opclose")
+		break
+	case ws.OpPing:
+		glog.Errorln("oping")
+		break
+	case ws.OpPong:
+		glog.Errorln("oppong")
+		break
+	default:
+		glog.Errorln("未处理opCode", header.OpCode, conn.netConn.RemoteAddr())
+	}
+
+	return
+}
+
+func (p *ProtocolWs) Reader1(netConn net.Conn) (message []byte, err error) {
 	header, err := ws.ReadHeader(netConn)
 	if err != nil {
 		glog.Errorln(err)

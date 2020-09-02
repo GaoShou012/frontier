@@ -37,6 +37,8 @@ type conn struct {
 	desc     *netpoll.Desc
 	frontier *Frontier
 	protocol Protocol
+
+	temp []byte
 }
 
 func (c *conn) Frontier() *Frontier {

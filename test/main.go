@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"github.com/GaoShou012/frontier"
 	"github.com/GaoShou012/tools/logger"
 	"github.com/golang/glog"
@@ -18,7 +17,7 @@ func main() {
 		ticker := time.NewTicker(time.Second)
 		for{
 			<-ticker.C
-			fmt.Println(messageCounter)
+			//fmt.Println(messageCounter)
 		}
 	}()
 

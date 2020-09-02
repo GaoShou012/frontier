@@ -3,7 +3,6 @@ package frontier
 import (
 	"bytes"
 	"container/list"
-	"context"
 	"fmt"
 	"github.com/GaoShou012/frontier/netpoll"
 	"github.com/GaoShou012/tools/ider"
@@ -69,7 +68,8 @@ func (f *Frontier) Init() error {
 	f.ider.Init(f.MaxConnections)
 
 	// init tcp listener
-	ln, err := (&net.ListenConfig{KeepAlive: time.Second * 60}).Listen(context.TODO(), "tcp", f.Addr)
+	ln,err := net.Listen("tcp",f.Addr)
+	//ln, err := (&net.ListenConfig{KeepAlive: time.Second * 60}).Listen(context.TODO(), "tcp", f.Addr)
 	if err != nil {
 		return err
 	}
@@ -210,7 +210,7 @@ func (f *Frontier) onRecv(size int) {
 				// But we want to reuse previously spawned goroutine.
 				f.poller.Start(conn.desc, func(event netpoll.Event) {
 					go func() {
-						data, err := conn.protocol.Reader(conn.netConn)
+						data, err := conn.protocol.Reader(conn)
 						if err != nil {
 							if f.DynamicParams.LogLevel >= logger.LogWarning {
 								logger.Println(logger.LogWarning, err)

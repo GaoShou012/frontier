@@ -9,5 +9,5 @@ type Protocol interface {
 	OnAccept(conn Conn) error
 	OnClose(netConn net.Conn) error
 	Writer(netConn net.Conn, message []byte) error
-	Reader(netConn net.Conn) (message []byte, err error)
+	Reader(conn *conn) (message []byte, err error)
 }
