@@ -3,11 +3,10 @@
 package netpoll
 
 import (
-	"github.com/GaoShou012/tools/ider"
+	"golang.org/x/sys/unix"
 	"runtime"
 	"sync"
-
-	"golang.org/x/sys/unix"
+	"syscall"
 )
 
 // EpollEvent represents epoll events configuration bit mask.
@@ -233,18 +232,15 @@ const (
 	maxWaitEventsStop  = 32768
 )
 
-type job struct {
-	id int
-	n  int
-}
-
 type block struct {
 	events    []unix.EpollEvent
 	callbacks []func(event EpollEvent)
 }
 
-var blocks []block
-var jobs chan *job
+type job struct {
+	n          int
+	blockIndex int
+}
 
 func (ep *Epoll) wait(onError func(error)) {
 	defer func() {
@@ -254,68 +250,26 @@ func (ep *Epoll) wait(onError func(error)) {
 		close(ep.waitDone)
 	}()
 
-	events := make([]unix.EpollEvent, maxWaitEventsBegin)
-	callbacks := make([]func(EpollEvent), 0, maxWaitEventsBegin)
-	for {
-		n, err := unix.EpollWait(ep.fd, events, -1)
-		if err != nil {
-			if temporaryErr(err) {
-				continue
-			}
-			onError(err)
-			return
-		}
-
-		callbacks = callbacks[:n]
-
-		ep.mu.RLock()
-		for i := 0; i < n; i++ {
-			fd := int(events[i].Fd)
-			if fd == ep.eventFd { // signal to close
-				panic("signal to close")
-				ep.mu.RUnlock()
-				return
-			}
-			callbacks[i] = ep.callbacks[fd]
-		}
-		ep.mu.RUnlock()
-
-		for i := 0; i < n; i++ {
-			if cb := callbacks[i]; cb != nil {
-				cb(EpollEvent(events[i].Events))
-				callbacks[i] = nil
-			}
-		}
-
-		if n == len(events) && n*2 <= maxWaitEventsStop {
-			events = make([]unix.EpollEvent, n*2)
-			callbacks = make([]func(EpollEvent), 0, n*2)
-		}
-	}
-
-	// 缓存block
-	size := 1024 * 10
-	idPool := ider.IdPool{}
-	idPool.Init(size)
-	blocks = make([]block, size)
-	for i := 0; i < size; i++ {
+	jobs := make(chan *job, 100000)
+	blockMax := 100000
+	blockIndex := 0
+	blocks := make([]block, blockMax)
+	for i := 0; i < blockMax; i++ {
 		blocks[i] = block{
 			events:    make([]unix.EpollEvent, maxWaitEventsBegin),
 			callbacks: make([]func(event EpollEvent), 0, maxWaitEventsBegin),
 		}
 	}
-	jobs = make(chan *job, size)
-
 	for i := 0; i < runtime.NumCPU(); i++ {
 		go func() {
 			for {
 				job := <-jobs
-				id, n := job.id, job.n
-				callbacks := blocks[id].callbacks[:n]
+				blockIndex, n := job.blockIndex, job.n
+				callbacks := blocks[blockIndex].callbacks[:n]
 
 				ep.mu.RLock()
 				for i := 0; i < n; i++ {
-					fd := int(blocks[id].events[i].Fd)
+					fd := int(blocks[blockIndex].events[i].Fd)
 					if fd == ep.eventFd {
 						panic("epoll signal to close")
 					}
@@ -325,35 +279,97 @@ func (ep *Epoll) wait(onError func(error)) {
 
 				for i := 0; i < n; i++ {
 					if cb := callbacks[i]; cb != nil {
-						cb(EpollEvent(blocks[id].events[i].Events))
+						cb(EpollEvent(blocks[blockIndex].events[i].Events))
 						callbacks[i] = nil
 					}
 				}
-
-				idPool.Put(id)
 			}
 		}()
 	}
-
 	for {
-		id, err := idPool.Get()
+		n, err := unix.EpollWait(ep.fd, blocks[blockIndex].events, -1)
 		if err != nil {
-			panic(err)
-		}
-
-		n, err := unix.EpollWait(ep.fd, blocks[id].events, -1)
-		if err != nil {
-			if temporaryErr(err) {
-				idPool.Put(id)
+			errno, ok := err.(syscall.Errno)
+			if ok {
 				continue
+			} else {
+				panic(errno)
 			}
-			onError(err)
-			return
 		}
-
 		jobs <- &job{
-			id: id,
-			n:  n,
+			n:          n,
+			blockIndex: blockIndex,
+		}
+		blockIndex++
+		if blockIndex >= blockMax {
+			blockIndex = 0
 		}
 	}
+	//for {
+	//	n, err := unix.EpollWait(ep.fd, blocks[blockNumber].events, -1)
+	//	if err != nil {
+	//		errno, ok := err.(syscall.Errno)
+	//		if ok {
+	//			continue
+	//		} else {
+	//			panic(errno)
+	//		}
+	//	}
+	//
+	//}
+
+	//parallel := 1
+	//wg := sync.WaitGroup{}
+	//wg.Add(parallel)
+	//for i := 0; i < parallel; i++ {
+	//	go func() {
+	//		b := &block{
+	//			events:    make([]unix.EpollEvent, maxWaitEventsBegin),
+	//			callbacks: make([]func(event EpollEvent), 0, maxWaitEventsBegin),
+	//		}
+	//		defer wg.Done()
+	//		for {
+	//			n, err := unix.EpollWait(ep.fd, b.events, -1)
+	//			if err != nil {
+	//				errno, ok := err.(syscall.Errno)
+	//				if ok {
+	//					continue
+	//				} else {
+	//					panic(errno)
+	//				}
+	//			}
+	//
+	//			job := &job{
+	//				n:           n,
+	//				blockNumber: blockNumber,
+	//			}
+	//			blockNumber++
+	//			if blockNumber
+	//				callbacks := b.callbacks[:n]
+	//
+	//			ep.mu.RLock()
+	//			for i := 0; i < n; i++ {
+	//				fd := int(b.events[i].Fd)
+	//				if fd == ep.eventFd {
+	//					panic("epoll signal to close")
+	//				}
+	//				callbacks[i] = ep.callbacks[fd]
+	//			}
+	//			ep.mu.RUnlock()
+	//
+	//			for i := 0; i < n; i++ {
+	//				if cb := callbacks[i]; cb != nil {
+	//					cb(EpollEvent(b.events[i].Events))
+	//					callbacks[i] = nil
+	//				}
+	//			}
+	//
+	//			b = &block{
+	//				events:    make([]unix.EpollEvent, maxWaitEventsBegin),
+	//				callbacks: make([]func(event EpollEvent), 0, maxWaitEventsBegin),
+	//			}
+	//		}
+	//	}()
+	//}
+	//wg.Wait()
 }

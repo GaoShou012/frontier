@@ -1,8 +1,11 @@
 package frontier
 
 import (
+	"errors"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
+	"github.com/golang/glog"
+	"io"
 	"io/ioutil"
 	"net"
 	"time"
@@ -77,8 +80,156 @@ func (p *ProtocolWs) Writer(netConn net.Conn, message []byte) error {
 	}
 	return w.Flush()
 }
-
 func (p *ProtocolWs) Reader(netConn net.Conn) (message []byte, err error) {
+	header, err := ws.ReadHeader(netConn)
+	if err != nil {
+		glog.Errorln(err)
+		return
+	}
+
+	// Reset the Masked flag, server frames must not be masked as
+	// RFC6455 says.
+	header.Masked = false
+
+	switch header.OpCode {
+	case ws.OpContinuation:
+		glog.Errorln("continuation", netConn.RemoteAddr())
+		break
+	case ws.OpText:
+		message = make([]byte, header.Length)
+		_, err = io.ReadFull(netConn, message)
+		if err != nil {
+			glog.Errorln(err)
+			// handle error
+			return
+		}
+		break
+	case ws.OpBinary:
+		break
+	case ws.OpClose:
+		glog.Errorln("close", netConn.RemoteAddr())
+		err = errors.New("closed")
+		//err = netConn.SetWriteDeadline(time.Now().Add(p.DynamicParams.WriterTimeout))
+		//if err != nil {
+		//	return
+		//}
+		//err = ws.WriteHeader(netConn, header)
+		//if err != nil {
+		//	glog.Errorln(err)
+		//	return
+		//}
+		//_, err = netConn.Write(ws.CompiledClose)
+		//if err != nil {
+		//	glog.Errorln(err)
+		//	return
+		//}
+		break
+	case ws.OpPing:
+		glog.Errorln("ping", netConn.RemoteAddr())
+		err = netConn.SetWriteDeadline(time.Now().Add(p.DynamicParams.WriterTimeout))
+		if err != nil {
+			return
+		}
+		err = ws.WriteHeader(netConn, header)
+		if err != nil {
+			glog.Errorln(err)
+			return
+		}
+		_, err = netConn.Write(ws.CompiledPong)
+		if err != nil {
+			glog.Errorln(err)
+			return
+		}
+		break
+	case ws.OpPong:
+		glog.Errorln("pong", netConn.RemoteAddr())
+		err = netConn.SetWriteDeadline(time.Now().Add(p.DynamicParams.WriterTimeout))
+		if err != nil {
+			return
+		}
+		err = ws.WriteHeader(netConn, header)
+		if err != nil {
+			glog.Errorln(err)
+			return
+		}
+		_, err = netConn.Write(ws.CompiledPing)
+		if err != nil {
+			glog.Errorln(err)
+			return
+		}
+		break
+	default:
+		glog.Errorln("未处理opCode", header.OpCode, netConn.RemoteAddr())
+	}
+	return
+}
+func (p *ProtocolWs) Reader2(netConn net.Conn) (message []byte, err error) {
+	message, op, err := wsutil.ReadClientData(netConn)
+	if err != nil {
+		return
+	}
+	switch op {
+	case ws.OpContinuation:
+		glog.Errorln("continuation", netConn.RemoteAddr())
+		break
+	case ws.OpText:
+		break
+	case ws.OpBinary:
+		break
+	case ws.OpClose:
+		glog.Errorln("close", netConn.RemoteAddr())
+		err = errors.New("closed")
+		//err = netConn.SetWriteDeadline(time.Now().Add(p.DynamicParams.WriterTimeout))
+		//if err != nil {
+		//	return
+		//}
+		//err = ws.WriteHeader(netConn, header)
+		//if err != nil {
+		//	glog.Errorln(err)
+		//	return
+		//}
+		//_, err = netConn.Write(ws.CompiledClose)
+		//if err != nil {
+		//	glog.Errorln(err)
+		//	return
+		//}
+		break
+	case ws.OpPing:
+		glog.Errorln("ping", netConn.RemoteAddr())
+		err = netConn.SetWriteDeadline(time.Now().Add(p.DynamicParams.WriterTimeout))
+		if err != nil {
+			return
+		}
+		w := wsutil.NewControlWriter(netConn, ws.StateServerSide, ws.OpPong)
+		if _, e := w.Write(nil); e != nil {
+			err = e
+		}
+		if e := w.Flush(); e != nil {
+			err = e
+		}
+		break
+	case ws.OpPong:
+		glog.Errorln("pong", netConn.RemoteAddr())
+		err = netConn.SetWriteDeadline(time.Now().Add(p.DynamicParams.WriterTimeout))
+		if err != nil {
+			return
+		}
+
+		w := wsutil.NewControlWriter(netConn, ws.StateServerSide, ws.OpPing)
+		if _, e := w.Write(nil); e != nil {
+			err = e
+		}
+		if e := w.Flush(); e != nil {
+			err = e
+		}
+		break
+	default:
+		glog.Errorln("未处理opCode", op, netConn.RemoteAddr())
+	}
+	return
+}
+
+func (p *ProtocolWs) ReaderOld(netConn net.Conn) (message []byte, err error) {
 	h, r, err := wsutil.NextReader(netConn, ws.StateServerSide)
 	if err != nil {
 		return
@@ -86,7 +237,7 @@ func (p *ProtocolWs) Reader(netConn net.Conn) (message []byte, err error) {
 
 	if h.OpCode.IsControl() {
 		if h.OpCode == ws.OpPing {
-			err = netConn.SetWriteDeadline(time.Now().Add(p.DynamicParams.ReaderTimeout))
+			err = netConn.SetWriteDeadline(time.Now().Add(p.DynamicParams.WriterTimeout))
 			if err != nil {
 				return
 			}

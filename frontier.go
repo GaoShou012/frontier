@@ -235,10 +235,16 @@ func (f *Frontier) onRecv(size int) {
 							f.eventPush(ConnEventTypeDelete, conn)
 							return
 						}
-						f.eventPush(ConnEventTypeUpdate, conn)
+						if data == nil {
+							return
+						}
+						//f.eventPush(ConnEventTypeUpdate, conn)
 						if bytes.Equal(data, []byte("ping")) {
 							return
 						}
+						//message := f.onMessageHandle.pool.Get().(*Message)
+						//message.conn, message.data = conn, data
+						//f.onMessageHandle.cache <- message
 						if f.Handler.OnMessage != nil {
 							f.Handler.OnMessage(conn, data)
 						} else {
@@ -251,28 +257,29 @@ func (f *Frontier) onRecv(size int) {
 	}
 }
 
-//func (f *Frontier) onHandle(size int) {
-//	f.onMessageHandle.cache = make(chan *Message, size)
-//	f.onMessageHandle.pool.New = func() interface{} {
-//		return new(Message)
-//	}
-//	for i := 0; i < runtime.NumCPU(); i++ {
-//		go func() {
-//			for {
-//				message := <-f.onMessageHandle.cache
-//				conn, data := message.conn, message.data
-//				if f.Handler.OnMessage != nil {
-//					f.Handler.OnMessage(conn, data)
-//				} else {
-//					logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnMessage program")
-//				}
-//				f.onMessageHandle.pool.Put(message)
-//			}
-//		}()
-//	}
-//}
+func (f *Frontier) onHandle(size int) {
+	f.onMessageHandle.cache = make(chan *Message, size)
+	f.onMessageHandle.pool.New = func() interface{} {
+		return new(Message)
+	}
+	for i := 0; i < runtime.NumCPU(); i++ {
+		go func() {
+			for {
+				message := <-f.onMessageHandle.cache
+				conn, data := message.conn, message.data
+				if f.Handler.OnMessage != nil {
+					f.Handler.OnMessage(conn, data)
+				} else {
+					logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnMessage program")
+				}
+				f.onMessageHandle.pool.Put(message)
+			}
+		}()
+	}
+}
 
 func (f *Frontier) eventPush(evt int, conn *conn) {
+	return
 	if evt == ConnEventTypeInsert || evt == ConnEventTypeUpdate {
 		conn.deadline = f.event.timestamp + f.DynamicParams.HeartbeatTimeout
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/GaoShou012/frontier"
 	"github.com/GaoShou012/tools/logger"
 	"github.com/golang/glog"
@@ -12,6 +13,15 @@ import (
 )
 
 func main() {
+	messageCounter := 0
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		for{
+			<-ticker.C
+			fmt.Println(messageCounter)
+		}
+	}()
+
 	id := uuid.NewV4().String()
 	addr := ":1234"
 	maxConnections := 1000000
@@ -32,6 +42,8 @@ func main() {
 			return nil
 		},
 		OnMessage: func(conn frontier.Conn, message []byte) {
+			//fmt.Println(message)
+			messageCounter++
 		},
 		OnClose: func(conn frontier.Conn) {
 		},
