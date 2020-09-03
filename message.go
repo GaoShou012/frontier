@@ -1,6 +1,6 @@
 package frontier
 
 type Message struct {
-	conn *conn
-	data []byte
+	conn    *conn
+	payload []byte
 }

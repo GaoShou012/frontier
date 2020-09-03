@@ -1,7 +1,6 @@
 package frontier
 
 import (
-	"bytes"
 	"container/list"
 	"fmt"
 	"github.com/GaoShou012/frontier/netpoll"
@@ -68,7 +67,7 @@ func (f *Frontier) Init() error {
 	f.ider.Init(f.MaxConnections)
 
 	// init tcp listener
-	ln,err := net.Listen("tcp",f.Addr)
+	ln, err := net.Listen("tcp", f.Addr)
 	//ln, err := (&net.ListenConfig{KeepAlive: time.Second * 60}).Listen(context.TODO(), "tcp", f.Addr)
 	if err != nil {
 		return err
@@ -91,7 +90,7 @@ func (f *Frontier) Init() error {
 	f.eventHandler()
 	f.onOpen(runtime.NumCPU()*10, 100000)
 	f.onRecv(100000)
-	//f.onHandle(100000)
+	f.onHandle(100000)
 
 	return nil
 }
@@ -210,7 +209,8 @@ func (f *Frontier) onRecv(size int) {
 				// But we want to reuse previously spawned goroutine.
 				f.poller.Start(conn.desc, func(event netpoll.Event) {
 					go func() {
-						data, err := conn.protocol.Reader(conn)
+						//fmt.Println("event_reader",conn)
+						_, err := conn.protocol.Reader(conn)
 						if err != nil {
 							if f.DynamicParams.LogLevel >= logger.LogWarning {
 								logger.Println(logger.LogWarning, err)
@@ -235,21 +235,21 @@ func (f *Frontier) onRecv(size int) {
 							f.eventPush(ConnEventTypeDelete, conn)
 							return
 						}
-						if data == nil {
-							return
-						}
+						//if data == nil {
+						//	return
+						//}
 						//f.eventPush(ConnEventTypeUpdate, conn)
-						if bytes.Equal(data, []byte("ping")) {
-							return
-						}
+						//if bytes.Equal(data, []byte("ping")) {
+						//	return
+						//}
 						//message := f.onMessageHandle.pool.Get().(*Message)
 						//message.conn, message.data = conn, data
 						//f.onMessageHandle.cache <- message
-						if f.Handler.OnMessage != nil {
-							f.Handler.OnMessage(conn, data)
-						} else {
-							logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnMessage program")
-						}
+						//if f.Handler.OnMessage != nil {
+						//	f.Handler.OnMessage(conn, data)
+						//} else {
+						//	logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnMessage program")
+						//}
 					}()
 				})
 			}
@@ -258,21 +258,21 @@ func (f *Frontier) onRecv(size int) {
 }
 
 func (f *Frontier) onHandle(size int) {
-	f.onMessageHandle.cache = make(chan *Message, size)
-	f.onMessageHandle.pool.New = func() interface{} {
-		return new(Message)
-	}
+	//f.onMessageHandle.cache = make(chan *Message, size)
+	//f.onMessageHandle.pool.New = func() interface{} {
+	//	return new(Message)
+	//}
 	for i := 0; i < runtime.NumCPU(); i++ {
 		go func() {
 			for {
-				message := <-f.onMessageHandle.cache
-				conn, data := message.conn, message.data
+				message := <-f.Protocol.OnMessage()
+				conn, data := message.conn, message.payload
 				if f.Handler.OnMessage != nil {
 					f.Handler.OnMessage(conn, data)
 				} else {
 					logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnMessage program")
 				}
-				f.onMessageHandle.pool.Put(message)
+				//f.onMessageHandle.pool.Put(message)
 			}
 		}()
 	}

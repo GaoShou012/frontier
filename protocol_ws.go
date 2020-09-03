@@ -1,6 +1,7 @@
 package frontier
 
 import (
+	"container/list"
 	"errors"
 	"fmt"
 	"github.com/gobwas/ws"
@@ -10,27 +11,118 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
+	"runtime"
+	"sync"
 	"time"
 )
 
 var _ Protocol = &ProtocolWs{}
 
+type readerJob struct {
+	conn    *conn
+	done    chan bool
+	message []byte
+	fin     bool
+	err     error
+}
+
 type ProtocolWs struct {
 	DynamicParams *DynamicParams
 	Handler       *Handler
 	MessageCount  int
+	onMessage     chan *Message
+	readerJobs    []chan *conn
+	EventsMask    []sync.Map
+
+	mutex      sync.Mutex
+	EventCount int
+
+	again  list.List
+	reader chan *conn
+}
+
+func (p *ProtocolWs) OnMessage() chan *Message {
+	return p.onMessage
 }
 
 func (p *ProtocolWs) OnInit(params *DynamicParams, handler *Handler) {
 	p.DynamicParams = params
 	p.Handler = handler
+
 	go func() {
-		ticker := time.NewTicker(time.Second)
+		ticker := time.NewTicker(time.Millisecond)
+		deadline := time.Millisecond * 10
 		for {
-			<-ticker.C
-			fmt.Println(p.MessageCount)
+			now := <-ticker.C
+			var del []*list.Element
+			for ele := p.again.Front(); ele != nil; ele = ele.Next() {
+				conn := ele.Value.(*conn)
+				if now.Sub(conn.lastReaderTime) < deadline {
+					break
+				}
+				del = append(del, ele)
+				p.reader <- conn
+			}
+			for _, ele := range del {
+				p.again.Remove(ele)
+			}
 		}
 	}()
+
+	p.reader = make(chan *conn, 100000)
+	p.onMessage = make(chan *Message, 100000)
+	for i := 0; i < runtime.NumCPU(); i++ {
+		go func() {
+			for {
+				conn := <-p.reader
+				count := 0
+
+				header, err := ws.ReadHeader(conn.netConn)
+				if err != nil {
+					glog.Errorln(err)
+					continue
+				}
+
+				if header.Length == 0 {
+					if conn.lastCheck {
+						// 直接释放
+						conn.rwMutex.Lock()
+						conn.isReading = false
+						conn.lastCheck = false
+						conn.rwMutex.Unlock()
+					} else {
+						// 再次提交进行最后检查
+						conn.lastCheck = true
+						conn.lastReaderTime = time.Now()
+						p.again.PushBack(conn)
+					}
+					continue
+				}
+
+			Loop:
+				if header.Fin {
+					payload := make([]byte, header.Length)
+					_, err = io.ReadFull(conn.netConn, payload)
+					p.onMessage <- &Message{conn: conn, payload: payload}
+				} else {
+					glog.Error(header)
+				}
+
+				if count < 2 {
+					count++
+					header, err = ws.ReadHeader(conn.netConn)
+					if err != nil {
+						glog.Errorln(err)
+						continue
+					}
+					if header.Length > 0 {
+						goto Loop
+					}
+				}
+				p.reader <- conn
+			}
+		}()
+	}
 }
 
 func (p *ProtocolWs) OnAccept(conn Conn) error {
@@ -91,6 +183,28 @@ func (p *ProtocolWs) Writer(netConn net.Conn, message []byte) error {
 	return w.Flush()
 }
 func (p *ProtocolWs) Reader(conn *conn) (message []byte, err error) {
+	var isReading bool
+
+	conn.rwMutex.RLock()
+	isReading = conn.isReading
+	conn.rwMutex.RUnlock()
+	if isReading {
+		return
+	}
+
+	conn.rwMutex.Lock()
+	isReading = conn.isReading
+	conn.isReading = true
+	conn.rwMutex.Unlock()
+	if isReading {
+		return
+	}
+
+	p.reader <- conn
+	return
+}
+
+func (p *ProtocolWs) Reader4(conn *conn) (message []byte, err error) {
 	//_,err = ws.ReadFrame(conn.netConn)
 	//if err != nil {
 	//	glog.Errorln(err)

@@ -3,6 +3,7 @@ package frontier
 import (
 	"github.com/GaoShou012/frontier/netpoll"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -26,8 +27,9 @@ type Conn interface {
 var _ Conn = &conn{}
 
 type conn struct {
-	id    int
-	state int
+	id     int
+	state  int
+	broken bool
 
 	netConn        net.Conn
 	context        interface{}
@@ -39,6 +41,11 @@ type conn struct {
 	protocol Protocol
 
 	temp []byte
+
+	isReading      bool
+	lastReaderTime time.Time
+	rwMutex        sync.RWMutex
+	lastCheck      bool
 }
 
 func (c *conn) Frontier() *Frontier {

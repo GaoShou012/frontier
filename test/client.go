@@ -18,7 +18,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var addr = flag.String("addr", "192.168.56.102:1234", "http service address")
+var addr = flag.String("addr", "192.168.56.101:1234", "http service address")
+var times = flag.Int("times", 1, "loop times")
 
 func main() {
 	flag.Parse()
@@ -62,9 +63,9 @@ func main() {
 		select {
 		case <-done:
 			return
-		case <-ticker.C:
-			//err := c.WriteMessage(websocket.TextMessage, []byte(t.String()))
-			err := c.WriteMessage(websocket.TextMessage, []byte("ping"))
+		case t := <-ticker.C:
+			err := c.WriteMessage(websocket.TextMessage, []byte(t.String()))
+			//err := c.WriteMessage(websocket.TextMessage, []byte("ping"))
 			if err != nil {
 				log.Println("write:", err)
 				return
@@ -72,10 +73,10 @@ func main() {
 			//time.Sleep(time.Second)
 			//panic("exit")
 			messageCount++
-			//if messageCount >= 3 {
-			//	time.Sleep(time.Second)
-			//	panic("exit")
-			//}
+			if messageCount >= *times {
+				time.Sleep(time.Second*5)
+				return
+			}
 		case <-interrupt:
 			log.Println("interrupt")
 			fmt.Println(messageCount)

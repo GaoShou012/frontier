@@ -17,7 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var addr = flag.String("addr", ":1234", "http service address")
+var addr = flag.String("addr", ":1235", "http service address")
 var messageCount int
 var upgrader = websocket.Upgrader{} // use default options
 

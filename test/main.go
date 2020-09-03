@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/GaoShou012/frontier"
 	"github.com/GaoShou012/tools/logger"
 	"github.com/golang/glog"
@@ -17,7 +18,7 @@ func main() {
 		ticker := time.NewTicker(time.Second)
 		for{
 			<-ticker.C
-			//fmt.Println(messageCounter)
+			fmt.Println(messageCounter)
 		}
 	}()
 
@@ -27,8 +28,8 @@ func main() {
 	dynamicParams := &frontier.DynamicParams{
 		LogLevel:         logger.LogAll,
 		HeartbeatTimeout: 90,
-		WriterBufferSize: 1024,
-		ReaderBufferSize: 1024,
+		WriterBufferSize: 4096,
+		ReaderBufferSize: 4096,
 		WriterTimeout:    time.Millisecond * 40,
 		ReaderTimeout:    time.Millisecond * 40,
 	}
