@@ -12,6 +12,12 @@ import (
 // EpollEvent represents epoll events configuration bit mask.
 type EpollEvent uint32
 
+type Events struct {
+	Fd    int
+	Event EpollEvent
+	Ctx   interface{}
+}
+
 // EpollEvents that are mapped to epoll_event.events possible values.
 const (
 	EPOLLIN      = unix.EPOLLIN
@@ -63,6 +69,9 @@ type Epoll struct {
 	waitDone chan struct{}
 
 	callbacks map[int]func(EpollEvent)
+	events    chan *Events
+
+	fdContext map[int]interface{}
 }
 
 // EpollConfig contains options for Epoll instance configuration.
@@ -114,11 +123,13 @@ func EpollCreate(c *EpollConfig) (*Epoll, error) {
 		eventFd:   eventFd,
 		callbacks: make(map[int]func(EpollEvent)),
 		waitDone:  make(chan struct{}),
+		fdContext: make(map[int]interface{}),
 	}
 
 	// Run wait loop.
 	go ep.wait(config.OnWaitError)
 
+	ep.events = make(chan *Events, 1000000)
 	return ep, nil
 }
 
@@ -190,6 +201,26 @@ func (ep *Epoll) Add(fd int, events EpollEvent, cb func(EpollEvent)) (err error)
 	return unix.EpollCtl(ep.fd, unix.EPOLL_CTL_ADD, fd, ev)
 }
 
+func (ep *Epoll) AddReader(fd int, events EpollEvent, ctx interface{}) (err error) {
+	ev := &unix.EpollEvent{
+		Events: uint32(events),
+		Fd:     int32(fd),
+	}
+
+	ep.mu.Lock()
+	defer ep.mu.Unlock()
+
+	if ep.closed {
+		return ErrClosed
+	}
+	if _, has := ep.fdContext[fd]; has {
+		return ErrRegistered
+	}
+	ep.fdContext[fd] = ctx
+
+	return unix.EpollCtl(ep.fd, unix.EPOLL_CTL_ADD, fd, ev)
+}
+
 // Del removes fd from epoll set.
 func (ep *Epoll) Del(fd int) (err error) {
 	ep.mu.Lock()
@@ -203,7 +234,7 @@ func (ep *Epoll) Del(fd int) (err error) {
 	}
 
 	delete(ep.callbacks, fd)
-
+	//return
 	return unix.EpollCtl(ep.fd, unix.EPOLL_CTL_DEL, fd, nil)
 }
 
@@ -227,6 +258,10 @@ func (ep *Epoll) Mod(fd int, events EpollEvent) (err error) {
 	return unix.EpollCtl(ep.fd, unix.EPOLL_CTL_MOD, fd, ev)
 }
 
+func (ep *Epoll) OnEvent() <-chan *Events {
+	return ep.events
+}
+
 const (
 	maxWaitEventsBegin = 10000
 	maxWaitEventsStop  = 32768
@@ -242,7 +277,7 @@ type job struct {
 	blockIndex int
 }
 
-func (ep *Epoll) wait(onError func(error)) {
+func (ep *Epoll) wait1(onError func(error)) {
 	defer func() {
 		if err := unix.Close(ep.fd); err != nil {
 			onError(err)
@@ -273,6 +308,157 @@ func (ep *Epoll) wait(onError func(error)) {
 				return
 			}
 			callbacks[i] = ep.callbacks[fd]
+		}
+		ep.mu.RUnlock()
+
+		for i := 0; i < n; i++ {
+			if cb := callbacks[i]; cb != nil {
+				cb(EpollEvent(events[i].Events))
+				callbacks[i] = nil
+			}
+		}
+
+		if n == len(events) && n*2 <= maxWaitEventsStop {
+			events = make([]unix.EpollEvent, n*2)
+			callbacks = make([]func(EpollEvent), 0, n*2)
+		}
+	}
+}
+
+func (ep *Epoll) wait(onError func(error)) {
+	defer func() {
+		if err := unix.Close(ep.fd); err != nil {
+			onError(err)
+		}
+		close(ep.waitDone)
+	}()
+
+	go func() {
+		events := make([]unix.EpollEvent, maxWaitEventsBegin)
+		callbacks := make([]func(EpollEvent), 0, maxWaitEventsBegin)
+		for {
+			n, err := unix.EpollWait(ep.fd, events, -1)
+			if err != nil {
+				if temporaryErr(err) {
+					continue
+				}
+				onError(err)
+				return
+			}
+			//fmt.Print("n", n)
+			callbacks = callbacks[:n]
+
+			ep.mu.RLock()
+			for i := 0; i < n; i++ {
+				fd := int(events[i].Fd)
+				if fd == ep.eventFd { // signal to close
+					panic("signal to close")
+					ep.mu.RUnlock()
+					return
+				}
+				callbacks[i] = ep.callbacks[fd]
+
+				// 如果是读事件
+				epollEvent := events[i].Events
+				if ctx, has := ep.fdContext[fd]; has {
+					var event Event
+
+					if epollEvent&EPOLLHUP != 0 {
+						event |= EventHup
+					}
+					if epollEvent&EPOLLRDHUP != 0 {
+						event |= EventReadHup
+					}
+					if epollEvent&EPOLLIN != 0 {
+						event |= EventRead
+					}
+					if epollEvent&EPOLLOUT != 0 {
+						event |= EventWrite
+					}
+					if epollEvent&EPOLLERR != 0 {
+						event |= EventErr
+					}
+					if epollEvent&_EPOLLCLOSED != 0 {
+						event |= EventPollerClosed
+					}
+
+					ep.events <- &Events{
+						Fd:    fd,
+						Event: 0,
+						Ctx:   ctx,
+					}
+				}
+			}
+			ep.mu.RUnlock()
+
+			for i := 0; i < n; i++ {
+				if cb := callbacks[i]; cb != nil {
+					cb(EpollEvent(events[i].Events))
+					callbacks[i] = nil
+				}
+			}
+
+			if n == len(events) && n*2 <= maxWaitEventsStop {
+				events = make([]unix.EpollEvent, n*2)
+				callbacks = make([]func(EpollEvent), 0, n*2)
+			}
+		}
+	}()
+
+	events := make([]unix.EpollEvent, maxWaitEventsBegin)
+	callbacks := make([]func(EpollEvent), 0, maxWaitEventsBegin)
+	for {
+		n, err := unix.EpollWait(ep.fd, events, -1)
+		if err != nil {
+			if temporaryErr(err) {
+				continue
+			}
+			onError(err)
+			return
+		}
+		//fmt.Print("n", n)
+		callbacks = callbacks[:n]
+
+		ep.mu.RLock()
+		for i := 0; i < n; i++ {
+			fd := int(events[i].Fd)
+			if fd == ep.eventFd { // signal to close
+				panic("signal to close")
+				ep.mu.RUnlock()
+				return
+			}
+			callbacks[i] = ep.callbacks[fd]
+
+			// 如果是读事件
+			epollEvent := events[i].Events
+			if ctx, has := ep.fdContext[fd]; has {
+				var event Event
+
+				if epollEvent&EPOLLHUP != 0 {
+					event |= EventHup
+				}
+				if epollEvent&EPOLLRDHUP != 0 {
+					event |= EventReadHup
+				}
+				if epollEvent&EPOLLIN != 0 {
+					event |= EventRead
+				}
+				if epollEvent&EPOLLOUT != 0 {
+					event |= EventWrite
+				}
+				if epollEvent&EPOLLERR != 0 {
+					event |= EventErr
+				}
+				if epollEvent&_EPOLLCLOSED != 0 {
+					event |= EventPollerClosed
+				}
+
+				ep.events <- &Events{
+					Fd:    fd,
+					Event: 0,
+					Ctx:   ctx,
+				}
+			}
 		}
 		ep.mu.RUnlock()
 

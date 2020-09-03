@@ -25,6 +25,16 @@ type poller struct {
 	*Epoll
 }
 
+func (ep poller) StartReader(desc *Desc, ctx interface{}) error {
+	err := ep.AddReader(desc.fd(), toEpollEvent(desc.event), ctx)
+	if err == nil {
+		if err = setNonblock(desc.fd(), true); err != nil {
+			return os.NewSyscallError("setnonblock", err)
+		}
+	}
+	return err
+}
+
 // Start implements Poller.Start() method.
 func (ep poller) Start(desc *Desc, cb CallbackFn) error {
 	err := ep.Add(desc.fd(), toEpollEvent(desc.event),

@@ -25,6 +25,11 @@ type DynamicParams struct {
 	ReaderTimeout time.Duration
 }
 
+type ReaderEvent struct {
+	conn  *conn
+	event netpoll.Event
+}
+
 type Frontier struct {
 	Id             string
 	Addr           string
@@ -57,6 +62,8 @@ type Frontier struct {
 		connections []*list.List
 		cache       []chan *connEvent
 	}
+
+	readerEvent chan *ReaderEvent
 }
 
 func (f *Frontier) Init() error {
@@ -87,10 +94,13 @@ func (f *Frontier) Init() error {
 	f.sender = &sender{}
 	f.sender.init(2, 100000, f.DynamicParams)
 
+	f.readerEvent = make(chan *ReaderEvent, 200000)
+
 	f.eventHandler()
 	f.onOpen(runtime.NumCPU()*10, 100000)
 	f.onRecv(100000)
 	f.onHandle(100000)
+	f.onEvent()
 
 	return nil
 }
@@ -201,57 +211,91 @@ func (f *Frontier) onRecv(size int) {
 			for {
 				conn := <-f.onRecvCache
 				f.eventPush(ConnEventTypeInsert, conn)
-
+				
 				// Here we can read some new message from connection.
 				// We can not read it right here in callback, because then we will
 				// block the poller's inner loop.
 				// We do not want to spawn a new goroutine to read single message.
 				// But we want to reuse previously spawned goroutine.
+				f.poller.StartReader(conn.desc, conn)
+				continue
 				f.poller.Start(conn.desc, func(event netpoll.Event) {
-					go func() {
-						//fmt.Println("event_reader",conn)
-						_, err := conn.protocol.Reader(conn)
-						if err != nil {
-							if f.DynamicParams.LogLevel >= logger.LogWarning {
-								logger.Println(logger.LogWarning, err)
-							}
-							if f.Handler.OnClose != nil {
-								f.Handler.OnClose(conn)
-							} else {
-								logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnClose program")
-							}
-							if err := f.Protocol.OnClose(conn.netConn); err != nil {
-								logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
-							}
-							if err := conn.netConn.Close(); err != nil {
-								logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
-							}
-							if err := f.poller.Stop(conn.desc); err != nil {
-								logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
-							}
-							if err := conn.desc.Close(); err != nil {
-								logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
-							}
-							f.eventPush(ConnEventTypeDelete, conn)
-							return
-						}
-						//if data == nil {
-						//	return
-						//}
-						//f.eventPush(ConnEventTypeUpdate, conn)
-						//if bytes.Equal(data, []byte("ping")) {
-						//	return
-						//}
-						//message := f.onMessageHandle.pool.Get().(*Message)
-						//message.conn, message.data = conn, data
-						//f.onMessageHandle.cache <- message
-						//if f.Handler.OnMessage != nil {
-						//	f.Handler.OnMessage(conn, data)
-						//} else {
-						//	logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnMessage program")
-						//}
-					}()
+					//fmt.Println("event_reader",conn)
+					//_, err := conn.protocol.Reader(conn)
+					f.readerEvent <- &ReaderEvent{
+						conn:  conn,
+						event: event,
+					}
+
+					//if err != nil {
+					//	if f.DynamicParams.LogLevel >= logger.LogWarning {
+					//		logger.Println(logger.LogWarning, err)
+					//	}
+					//	if f.Handler.OnClose != nil {
+					//		f.Handler.OnClose(conn)
+					//	} else {
+					//		logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnClose program")
+					//	}
+					//	if err := f.Protocol.OnClose(conn.netConn); err != nil {
+					//		logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
+					//	}
+					//	if err := conn.netConn.Close(); err != nil {
+					//		logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
+					//	}
+					//	if err := f.poller.Stop(conn.desc); err != nil {
+					//		logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
+					//	}
+					//	if err := conn.desc.Close(); err != nil {
+					//		logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
+					//	}
+					//	f.eventPush(ConnEventTypeDelete, conn)
+					//	return
+					//}
+					//if data == nil {
+					//	return
+					//}
+					//f.eventPush(ConnEventTypeUpdate, conn)
+					//if bytes.Equal(data, []byte("ping")) {
+					//	return
+					//}
+					//message := f.onMessageHandle.pool.Get().(*Message)
+					//message.conn, message.data = conn, data
+					//f.onMessageHandle.cache <- message
+					//if f.Handler.OnMessage != nil {
+					//	f.Handler.OnMessage(conn, data)
+					//} else {
+					//	logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnMessage program")
+					//}
 				})
+			}
+		}()
+	}
+}
+
+func (f *Frontier) onEvent() {
+	for i := 0; i < runtime.NumCPU(); i++ {
+		go func() {
+			for {
+				evt := <-f.readerEvent
+				f.Protocol.Reader(evt.conn)
+			}
+		}()
+	}
+	eventCount := 0
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		for{
+			<-ticker.C
+			fmt.Println("eventCount",eventCount)
+		}
+	}()
+	for i := 0; i < runtime.NumCPU(); i++ {
+		go func() {
+			for {
+				event := <-f.poller.OnEvent()
+				conn := event.Ctx.(*conn)
+				eventCount++
+				f.Protocol.Reader(conn)
 			}
 		}()
 	}

@@ -18,7 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var addr = flag.String("addr", "192.168.56.101:1234", "http service address")
+var addr = flag.String("addr", "192.168.56.102:1234", "http service address")
 var times = flag.Int("times", 1, "loop times")
 
 func main() {
@@ -37,6 +37,7 @@ func main() {
 	}
 	defer c.Close()
 
+	time.Sleep(time.Second)
 	done := make(chan struct{})
 	messageCount := 0
 
@@ -74,7 +75,8 @@ func main() {
 			//panic("exit")
 			messageCount++
 			if messageCount >= *times {
-				time.Sleep(time.Second*5)
+				fmt.Println("waiting")
+				time.Sleep(time.Second*10)
 				return
 			}
 		case <-interrupt:
