@@ -16,7 +16,7 @@ func main() {
 	messageCounter := 0
 	go func() {
 		ticker := time.NewTicker(time.Second)
-		for{
+		for {
 			<-ticker.C
 			fmt.Println(messageCounter)
 		}
@@ -42,7 +42,9 @@ func main() {
 			return nil
 		},
 		OnMessage: func(conn frontier.Conn, message []byte) {
-			//fmt.Println(message)
+			if string(message) != "ping1" {
+				panic("not ping1")
+			}
 			messageCounter++
 		},
 		OnClose: func(conn frontier.Conn) {

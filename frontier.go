@@ -155,6 +155,7 @@ func (f *Frontier) Start() error {
 			connectionTime: time.Now(),
 			deadline:       0,
 			desc:           nil,
+			readerBuf:      make([]byte, 1024),
 		}
 		err = f.Protocol.OnAccept(conn)
 		if err != nil {
@@ -211,7 +212,7 @@ func (f *Frontier) onRecv(size int) {
 			for {
 				conn := <-f.onRecvCache
 				f.eventPush(ConnEventTypeInsert, conn)
-				
+
 				// Here we can read some new message from connection.
 				// We can not read it right here in callback, because then we will
 				// block the poller's inner loop.
@@ -284,9 +285,9 @@ func (f *Frontier) onEvent() {
 	eventCount := 0
 	go func() {
 		ticker := time.NewTicker(time.Second)
-		for{
+		for {
 			<-ticker.C
-			fmt.Println("eventCount",eventCount)
+			fmt.Println("eventCount", eventCount)
 		}
 	}()
 	for i := 0; i < runtime.NumCPU(); i++ {
