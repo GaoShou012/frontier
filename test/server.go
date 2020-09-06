@@ -17,7 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var addr = flag.String("addr", ":1235", "http service address")
+var addr = flag.String("addr", ":1234", "http service address")
 var messageCount int
 var upgrader = websocket.Upgrader{} // use default options
 
@@ -28,14 +28,31 @@ func echo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.Close()
+	c.SetPingHandler(func(appData string) error {
+		//fmt.Println(appData)
+		//c.WriteControl(websocket.PongMessage, nil, time.Now().Add(time.Millisecond*10))
+		return nil
+	})
 	for {
-		//mt, message, err := c.ReadMessage()
 		_, _, err := c.ReadMessage()
 		if err != nil {
-			log.Println("read:", err)
-			break
+			continue
 		}
+		//op, _, err := c.ReadMessage()
+		//if err != nil {
+		//	log.Println("read:", err)
+		//	break
+		//}
+		//fmt.Println(mt, message, err)
+		//c.WriteMessage(websocket.TextMessage, message)
+		//c.WriteControl(websocket.PongMessage,nil,time.Now().Add(time.Millisecond*10))
+		//fmt.Println(message)
 		messageCount++
+		//if mt == websocket.PingMessage {
+		//	fmt.Println("ping message")
+		//	c.WriteControl(websocket.PongMessage, nil, time.Now().Add(time.Millisecond*100))
+		//}
+
 		//log.Printf("recv: %s", message)
 		//err = c.WriteMessage(mt, message)
 		//if err != nil {
@@ -54,9 +71,10 @@ func main() {
 		ticker := time.NewTicker(time.Second)
 		for {
 			<-ticker.C
-			fmt.Println(messageCount)
+			fmt.Println("gorilla", messageCount)
 		}
 	}()
+
 	flag.Parse()
 	log.SetFlags(0)
 	http.HandleFunc("/", echo)

@@ -1,6 +1,9 @@
 package frontier
 
+import "github.com/gobwas/ws"
+
 type Message struct {
-	conn    *conn
-	payload []byte
+	Conn    *conn
+	OpCode  ws.OpCode
+	Payload []byte
 }

@@ -67,7 +67,7 @@ type Frontier struct {
 }
 
 func (f *Frontier) Init() error {
-	f.Protocol.OnInit(f.DynamicParams, f.Handler)
+	f.Protocol.OnInit(f, f.DynamicParams, f.Handler)
 
 	// init ider
 	f.ider = &ider.IdPool{}
@@ -99,7 +99,7 @@ func (f *Frontier) Init() error {
 	f.eventHandler()
 	f.onOpen(runtime.NumCPU()*10, 100000)
 	f.onRecv(100000)
-	f.onHandle(100000)
+	f.onHandle()
 	f.onEvent()
 
 	return nil
@@ -119,6 +119,8 @@ func (f *Frontier) Start() error {
 				logger.Println(logger.LogError, err)
 			}
 		}()
+
+		fmt.Println("f.desc", event)
 
 		netConn, err := f.ln.Accept()
 		if err != nil {
@@ -155,7 +157,7 @@ func (f *Frontier) Start() error {
 			connectionTime: time.Now(),
 			deadline:       0,
 			desc:           nil,
-			readerBuf:      make([]byte, 1024),
+			wsReader:       &wsReader{bufferSiz: 512},
 		}
 		err = f.Protocol.OnAccept(conn)
 		if err != nil {
@@ -219,55 +221,6 @@ func (f *Frontier) onRecv(size int) {
 				// We do not want to spawn a new goroutine to read single message.
 				// But we want to reuse previously spawned goroutine.
 				f.poller.StartReader(conn.desc, conn)
-				continue
-				f.poller.Start(conn.desc, func(event netpoll.Event) {
-					//fmt.Println("event_reader",conn)
-					//_, err := conn.protocol.Reader(conn)
-					f.readerEvent <- &ReaderEvent{
-						conn:  conn,
-						event: event,
-					}
-
-					//if err != nil {
-					//	if f.DynamicParams.LogLevel >= logger.LogWarning {
-					//		logger.Println(logger.LogWarning, err)
-					//	}
-					//	if f.Handler.OnClose != nil {
-					//		f.Handler.OnClose(conn)
-					//	} else {
-					//		logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnClose program")
-					//	}
-					//	if err := f.Protocol.OnClose(conn.netConn); err != nil {
-					//		logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
-					//	}
-					//	if err := conn.netConn.Close(); err != nil {
-					//		logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
-					//	}
-					//	if err := f.poller.Stop(conn.desc); err != nil {
-					//		logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
-					//	}
-					//	if err := conn.desc.Close(); err != nil {
-					//		logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
-					//	}
-					//	f.eventPush(ConnEventTypeDelete, conn)
-					//	return
-					//}
-					//if data == nil {
-					//	return
-					//}
-					//f.eventPush(ConnEventTypeUpdate, conn)
-					//if bytes.Equal(data, []byte("ping")) {
-					//	return
-					//}
-					//message := f.onMessageHandle.pool.Get().(*Message)
-					//message.conn, message.data = conn, data
-					//f.onMessageHandle.cache <- message
-					//if f.Handler.OnMessage != nil {
-					//	f.Handler.OnMessage(conn, data)
-					//} else {
-					//	logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnMessage program")
-					//}
-				})
 			}
 		}()
 	}
@@ -277,47 +230,24 @@ func (f *Frontier) onEvent() {
 	for i := 0; i < runtime.NumCPU(); i++ {
 		go func() {
 			for {
-				evt := <-f.readerEvent
-				f.Protocol.Reader(evt.conn)
-			}
-		}()
-	}
-	eventCount := 0
-	go func() {
-		ticker := time.NewTicker(time.Second)
-		for {
-			<-ticker.C
-			fmt.Println("eventCount", eventCount)
-		}
-	}()
-	for i := 0; i < runtime.NumCPU(); i++ {
-		go func() {
-			for {
 				event := <-f.poller.OnEvent()
 				conn := event.Ctx.(*conn)
-				eventCount++
 				f.Protocol.Reader(conn)
 			}
 		}()
 	}
 }
 
-func (f *Frontier) onHandle(size int) {
-	//f.onMessageHandle.cache = make(chan *Message, size)
-	//f.onMessageHandle.pool.New = func() interface{} {
-	//	return new(Message)
-	//}
+func (f *Frontier) onHandle() {
 	for i := 0; i < runtime.NumCPU(); i++ {
 		go func() {
 			for {
 				message := <-f.Protocol.OnMessage()
-				conn, data := message.conn, message.payload
 				if f.Handler.OnMessage != nil {
-					f.Handler.OnMessage(conn, data)
+					f.Handler.OnMessage(message)
 				} else {
 					logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, "The handler has no OnMessage program")
 				}
-				//f.onMessageHandle.pool.Put(message)
 			}
 		}()
 	}

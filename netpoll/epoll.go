@@ -3,6 +3,7 @@
 package netpoll
 
 import (
+	"fmt"
 	"golang.org/x/sys/unix"
 	"runtime"
 	"sync"
@@ -16,6 +17,9 @@ type Events struct {
 	Fd    int
 	Event EpollEvent
 	Ctx   interface{}
+}
+
+type FdContext struct {
 }
 
 // EpollEvents that are mapped to epoll_event.events possible values.
@@ -186,7 +190,7 @@ func (ep *Epoll) Add(fd int, events EpollEvent, cb func(EpollEvent)) (err error)
 		Events: uint32(events),
 		Fd:     int32(fd),
 	}
-
+	fmt.Println("new fd", fd)
 	ep.mu.Lock()
 	defer ep.mu.Unlock()
 
@@ -333,78 +337,6 @@ func (ep *Epoll) wait(onError func(error)) {
 		close(ep.waitDone)
 	}()
 
-	go func() {
-		events := make([]unix.EpollEvent, maxWaitEventsBegin)
-		callbacks := make([]func(EpollEvent), 0, maxWaitEventsBegin)
-		for {
-			n, err := unix.EpollWait(ep.fd, events, -1)
-			if err != nil {
-				if temporaryErr(err) {
-					continue
-				}
-				onError(err)
-				return
-			}
-			//fmt.Print("n", n)
-			callbacks = callbacks[:n]
-
-			ep.mu.RLock()
-			for i := 0; i < n; i++ {
-				fd := int(events[i].Fd)
-				if fd == ep.eventFd { // signal to close
-					panic("signal to close")
-					ep.mu.RUnlock()
-					return
-				}
-				callbacks[i] = ep.callbacks[fd]
-
-				// 如果是读事件
-				epollEvent := events[i].Events
-				if ctx, has := ep.fdContext[fd]; has {
-					var event Event
-
-					if epollEvent&EPOLLHUP != 0 {
-						event |= EventHup
-					}
-					if epollEvent&EPOLLRDHUP != 0 {
-						event |= EventReadHup
-					}
-					if epollEvent&EPOLLIN != 0 {
-						event |= EventRead
-					}
-					if epollEvent&EPOLLOUT != 0 {
-						event |= EventWrite
-					}
-					if epollEvent&EPOLLERR != 0 {
-						event |= EventErr
-					}
-					if epollEvent&_EPOLLCLOSED != 0 {
-						event |= EventPollerClosed
-					}
-
-					ep.events <- &Events{
-						Fd:    fd,
-						Event: 0,
-						Ctx:   ctx,
-					}
-				}
-			}
-			ep.mu.RUnlock()
-
-			for i := 0; i < n; i++ {
-				if cb := callbacks[i]; cb != nil {
-					cb(EpollEvent(events[i].Events))
-					callbacks[i] = nil
-				}
-			}
-
-			if n == len(events) && n*2 <= maxWaitEventsStop {
-				events = make([]unix.EpollEvent, n*2)
-				callbacks = make([]func(EpollEvent), 0, n*2)
-			}
-		}
-	}()
-
 	events := make([]unix.EpollEvent, maxWaitEventsBegin)
 	callbacks := make([]func(EpollEvent), 0, maxWaitEventsBegin)
 	for {
@@ -422,6 +354,9 @@ func (ep *Epoll) wait(onError func(error)) {
 		ep.mu.RLock()
 		for i := 0; i < n; i++ {
 			fd := int(events[i].Fd)
+			fmt.Println("ep.fd=", ep.fd)
+			fmt.Println("fd=", fd)
+			fmt.Println("ep.fd callback=", ep.callbacks[ep.fd])
 			if fd == ep.eventFd { // signal to close
 				panic("signal to close")
 				ep.mu.RUnlock()
@@ -431,6 +366,7 @@ func (ep *Epoll) wait(onError func(error)) {
 
 			// 如果是读事件
 			epollEvent := events[i].Events
+
 			if ctx, has := ep.fdContext[fd]; has {
 				var event Event
 
