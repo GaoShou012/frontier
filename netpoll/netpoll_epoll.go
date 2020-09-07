@@ -3,7 +3,6 @@
 package netpoll
 
 import (
-	"fmt"
 	"os"
 )
 
@@ -36,15 +35,8 @@ func (ep poller) StartReader(desc *Desc, ctx interface{}) error {
 	return err
 }
 
-//func (ep poller) Handle(desc *Desc,cb CallbackFn) {
-//	ep.Add(desc.fd(),toEpollEvent(desc.event), func(event EpollEvent) {
-//
-//	})
-//}
-
 // Start implements Poller.Start() method.
 func (ep poller) Start(desc *Desc, cb CallbackFn) error {
-	fmt.Println("start ",desc.fd())
 	err := ep.Add(desc.fd(), toEpollEvent(desc.event),
 		func(ep EpollEvent) {
 			var event Event

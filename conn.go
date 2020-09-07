@@ -2,7 +2,6 @@ package frontier
 
 import (
 	"github.com/GaoShou012/frontier/netpoll"
-	"github.com/gobwas/ws"
 	"net"
 	"sync"
 	"time"
@@ -11,31 +10,9 @@ import (
 const (
 	connStateIsNothing = iota
 	connStateIsWorking
+	connStateIsClosing
 	connStateWasClosed
 )
-
-
-
-type wsReader struct {
-	state             int
-	isClose           bool
-	isReading         bool
-	rwMutex           sync.RWMutex
-	bufferSiz         int64
-	buffer            []byte
-	bufferN           int64
-	header            *ws.Header
-	headerExtraLength int64
-	lastCheck         bool
-	checkTimes        int
-	lastReadTime      time.Time
-}
-
-func (r *wsReader) Release() {
-	r.rwMutex.Lock()
-	defer r.rwMutex.Unlock()
-	r.isReading = false
-}
 
 type Conn interface {
 	Frontier() *Frontier
@@ -51,9 +28,10 @@ type Conn interface {
 var _ Conn = &conn{}
 
 type conn struct {
-	id     int
-	state  int
-	broken bool
+	id           int
+	state        int
+	stateRWMutex sync.RWMutex
+	broken       bool
 
 	netConn        net.Conn
 	context        interface{}
@@ -63,13 +41,24 @@ type conn struct {
 	desc     *netpoll.Desc
 	frontier *Frontier
 	protocol Protocol
-
-	temp []byte
-
-	wsReader *wsReader
 }
 
 func (c *conn) Init() {
+}
+
+func (c *conn) IsWorking() bool {
+	c.stateRWMutex.RLock()
+	defer c.stateRWMutex.RUnlock()
+	if c.state == connStateIsWorking {
+		return true
+	} else {
+		return false
+	}
+}
+func (c *conn) SetState(state int) {
+	c.stateRWMutex.Lock()
+	defer c.stateRWMutex.Unlock()
+	c.state = state
 }
 
 func (c *conn) Frontier() *Frontier {

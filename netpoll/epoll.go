@@ -3,11 +3,9 @@
 package netpoll
 
 import (
-	"fmt"
 	"golang.org/x/sys/unix"
 	"runtime"
 	"sync"
-	"syscall"
 )
 
 // EpollEvent represents epoll events configuration bit mask.
@@ -72,10 +70,12 @@ type Epoll struct {
 	closed   bool
 	waitDone chan struct{}
 
+	//callbacks map[int]func(EpollEvent)
 	callbacks map[int]func(EpollEvent)
 	events    chan *Events
 
 	fdContext map[int]interface{}
+	contexts  map[int]interface{}
 }
 
 // EpollConfig contains options for Epoll instance configuration.
@@ -190,7 +190,7 @@ func (ep *Epoll) Add(fd int, events EpollEvent, cb func(EpollEvent)) (err error)
 		Events: uint32(events),
 		Fd:     int32(fd),
 	}
-	fmt.Println("new fd", fd)
+
 	ep.mu.Lock()
 	defer ep.mu.Unlock()
 
@@ -238,7 +238,6 @@ func (ep *Epoll) Del(fd int) (err error) {
 	}
 
 	delete(ep.callbacks, fd)
-	//return
 	return unix.EpollCtl(ep.fd, unix.EPOLL_CTL_DEL, fd, nil)
 }
 
@@ -267,67 +266,9 @@ func (ep *Epoll) OnEvent() <-chan *Events {
 }
 
 const (
-	maxWaitEventsBegin = 10000
+	maxWaitEventsBegin = 1024
 	maxWaitEventsStop  = 32768
 )
-
-type block struct {
-	events    []unix.EpollEvent
-	callbacks []func(event EpollEvent)
-}
-
-type job struct {
-	n          int
-	blockIndex int
-}
-
-func (ep *Epoll) wait1(onError func(error)) {
-	defer func() {
-		if err := unix.Close(ep.fd); err != nil {
-			onError(err)
-		}
-		close(ep.waitDone)
-	}()
-
-	events := make([]unix.EpollEvent, maxWaitEventsBegin)
-	callbacks := make([]func(EpollEvent), 0, maxWaitEventsBegin)
-	for {
-		n, err := unix.EpollWait(ep.fd, events, -1)
-		if err != nil {
-			if temporaryErr(err) {
-				continue
-			}
-			onError(err)
-			return
-		}
-		//fmt.Print("n", n)
-		callbacks = callbacks[:n]
-
-		ep.mu.RLock()
-		for i := 0; i < n; i++ {
-			fd := int(events[i].Fd)
-			if fd == ep.eventFd { // signal to close
-				panic("signal to close")
-				ep.mu.RUnlock()
-				return
-			}
-			callbacks[i] = ep.callbacks[fd]
-		}
-		ep.mu.RUnlock()
-
-		for i := 0; i < n; i++ {
-			if cb := callbacks[i]; cb != nil {
-				cb(EpollEvent(events[i].Events))
-				callbacks[i] = nil
-			}
-		}
-
-		if n == len(events) && n*2 <= maxWaitEventsStop {
-			events = make([]unix.EpollEvent, n*2)
-			callbacks = make([]func(EpollEvent), 0, n*2)
-		}
-	}
-}
 
 func (ep *Epoll) wait(onError func(error)) {
 	defer func() {
@@ -337,140 +278,30 @@ func (ep *Epoll) wait(onError func(error)) {
 		close(ep.waitDone)
 	}()
 
-	events := make([]unix.EpollEvent, maxWaitEventsBegin)
-	callbacks := make([]func(EpollEvent), 0, maxWaitEventsBegin)
-	for {
-		n, err := unix.EpollWait(ep.fd, events, -1)
-		if err != nil {
-			if temporaryErr(err) {
-				continue
-			}
-			onError(err)
-			return
-		}
-		//fmt.Print("n", n)
-		callbacks = callbacks[:n]
-
-		ep.mu.RLock()
-		for i := 0; i < n; i++ {
-			fd := int(events[i].Fd)
-			fmt.Println("ep.fd=", ep.fd)
-			fmt.Println("fd=", fd)
-			fmt.Println("ep.fd callback=", ep.callbacks[ep.fd])
-			if fd == ep.eventFd { // signal to close
-				panic("signal to close")
-				ep.mu.RUnlock()
-				return
-			}
-			callbacks[i] = ep.callbacks[fd]
-
-			// 如果是读事件
-			epollEvent := events[i].Events
-
-			if ctx, has := ep.fdContext[fd]; has {
-				var event Event
-
-				if epollEvent&EPOLLHUP != 0 {
-					event |= EventHup
-				}
-				if epollEvent&EPOLLRDHUP != 0 {
-					event |= EventReadHup
-				}
-				if epollEvent&EPOLLIN != 0 {
-					event |= EventRead
-				}
-				if epollEvent&EPOLLOUT != 0 {
-					event |= EventWrite
-				}
-				if epollEvent&EPOLLERR != 0 {
-					event |= EventErr
-				}
-				if epollEvent&_EPOLLCLOSED != 0 {
-					event |= EventPollerClosed
-				}
-
-				ep.events <- &Events{
-					Fd:    fd,
-					Event: 0,
-					Ctx:   ctx,
-				}
-			}
-		}
-		ep.mu.RUnlock()
-
-		for i := 0; i < n; i++ {
-			if cb := callbacks[i]; cb != nil {
-				cb(EpollEvent(events[i].Events))
-				callbacks[i] = nil
-			}
-		}
-
-		if n == len(events) && n*2 <= maxWaitEventsStop {
-			events = make([]unix.EpollEvent, n*2)
-			callbacks = make([]func(EpollEvent), 0, n*2)
-		}
-	}
-
-	//events := make([]unix.EpollEvent, maxWaitEventsBegin)
-	//callbacks := make([]func(EpollEvent), 0, maxWaitEventsBegin)
-	//for {
-	//	n, err := unix.EpollWait(ep.fd, events, -1)
-	//	if err != nil {
-	//		if temporaryErr(err) {
-	//			continue
-	//		}
-	//		onError(err)
-	//		return
-	//	}
-	//	callbacks = callbacks[:n]
-	//
-	//	ep.mu.RLock()
-	//	for i := 0; i < n; i++ {
-	//		fd := int(events[i].Fd)
-	//		if fd == ep.eventFd { // signal to close
-	//			panic("signal to close")
-	//			ep.mu.RUnlock()
-	//			return
-	//		}
-	//		callbacks[i] = ep.callbacks[fd]
-	//	}
-	//	ep.mu.RUnlock()
-	//
-	//	for i := 0; i < n; i++ {
-	//		if cb := callbacks[i]; cb != nil {
-	//			cb(EpollEvent(events[i].Events))
-	//			callbacks[i] = nil
-	//		}
-	//	}
-	//
-	//	if n == len(events) && n*2 <= maxWaitEventsStop {
-	//		events = make([]unix.EpollEvent, n*2)
-	//		callbacks = make([]func(EpollEvent), 0, n*2)
-	//	}
-	//}
-
-	jobs := make(chan *job, 100000)
-	blockMax := 100000
-	blockIndex := 0
-	blocks := make([]block, blockMax)
-	for i := 0; i < blockMax; i++ {
-		blocks[i] = block{
-			events:    make([]unix.EpollEvent, maxWaitEventsBegin),
-			callbacks: make([]func(event EpollEvent), 0, maxWaitEventsBegin),
-		}
-	}
+	wg := sync.WaitGroup{}
 	for i := 0; i < runtime.NumCPU(); i++ {
-		go func() {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			events := make([]unix.EpollEvent, maxWaitEventsBegin)
+			callbacks := make([]func(EpollEvent), 0, maxWaitEventsBegin)
+
 			for {
-				job := <-jobs
-				blockIndex, n := job.blockIndex, job.n
-				callbacks := blocks[blockIndex].callbacks[:n]
+				n, err := unix.EpollWait(ep.fd, events, -1)
+				if err != nil {
+					if temporaryErr(err) {
+						continue
+					}
+					onError(err)
+					return
+				}
+				callbacks = callbacks[:n]
 
 				ep.mu.RLock()
 				for i := 0; i < n; i++ {
-					fd := int(blocks[blockIndex].events[i].Fd)
-					if fd == ep.eventFd {
-						panic("epoll signal to close")
+					fd := int(events[i].Fd)
+					if fd == ep.eventFd { // signal to close
+						panic("signal to close")
 					}
 					callbacks[i] = ep.callbacks[fd]
 				}
@@ -478,107 +309,12 @@ func (ep *Epoll) wait(onError func(error)) {
 
 				for i := 0; i < n; i++ {
 					if cb := callbacks[i]; cb != nil {
-						cb(EpollEvent(blocks[blockIndex].events[i].Events))
+						cb(EpollEvent(events[i].Events))
 						callbacks[i] = nil
 					}
 				}
-				//blocks[blockIndex] = block{
-				//	events:    make([]unix.EpollEvent, maxWaitEventsBegin),
-				//	callbacks: make([]func(event EpollEvent), 0, maxWaitEventsBegin),
-				//}
-				//if n == len(blocks[blockIndex].events) && n*2 <= maxWaitEventsStop {
-				//	blocks[blockIndex].events = make([]unix.EpollEvent, n*2)
-				//	blocks[blockIndex].callbacks = make([]func(EpollEvent), 0, n*2)
-				//}
 			}
-		}()
+		}(i)
 	}
-
-	for {
-		n, err := unix.EpollWait(ep.fd, blocks[blockIndex].events, 0)
-		if err != nil {
-			errno, ok := err.(syscall.Errno)
-			if ok {
-				continue
-			} else {
-				panic(errno)
-			}
-		}
-		jobs <- &job{
-			n:          n,
-			blockIndex: blockIndex,
-		}
-		blockIndex++
-		if blockIndex >= blockMax {
-			blockIndex = 0
-		}
-	}
-
-	//for {
-	//	n, err := unix.EpollWait(ep.fd, blocks[blockNumber].events, -1)
-	//	if err != nil {
-	//		errno, ok := err.(syscall.Errno)
-	//		if ok {
-	//			continue
-	//		} else {
-	//			panic(errno)
-	//		}
-	//	}
-	//
-	//}
-
-	//parallel := 1
-	//wg := sync.WaitGroup{}
-	//wg.Add(parallel)
-	//for i := 0; i < parallel; i++ {
-	//	go func() {
-	//		b := &block{
-	//			events:    make([]unix.EpollEvent, maxWaitEventsBegin),
-	//			callbacks: make([]func(event EpollEvent), 0, maxWaitEventsBegin),
-	//		}
-	//		defer wg.Done()
-	//		for {
-	//			n, err := unix.EpollWait(ep.fd, b.events, -1)
-	//			if err != nil {
-	//				errno, ok := err.(syscall.Errno)
-	//				if ok {
-	//					continue
-	//				} else {
-	//					panic(errno)
-	//				}
-	//			}
-	//
-	//			job := &job{
-	//				n:           n,
-	//				blockNumber: blockNumber,
-	//			}
-	//			blockNumber++
-	//			if blockNumber
-	//				callbacks := b.callbacks[:n]
-	//
-	//			ep.mu.RLock()
-	//			for i := 0; i < n; i++ {
-	//				fd := int(b.events[i].Fd)
-	//				if fd == ep.eventFd {
-	//					panic("epoll signal to close")
-	//				}
-	//				callbacks[i] = ep.callbacks[fd]
-	//			}
-	//			ep.mu.RUnlock()
-	//
-	//			for i := 0; i < n; i++ {
-	//				if cb := callbacks[i]; cb != nil {
-	//					cb(EpollEvent(b.events[i].Events))
-	//					callbacks[i] = nil
-	//				}
-	//			}
-	//
-	//			b = &block{
-	//				events:    make([]unix.EpollEvent, maxWaitEventsBegin),
-	//				callbacks: make([]func(event EpollEvent), 0, maxWaitEventsBegin),
-	//			}
-	//		}
-	//	}()
-	//}
-	//wg.Wait()
+	wg.Wait()
 }

@@ -28,10 +28,10 @@ func main() {
 	dynamicParams := &frontier.DynamicParams{
 		LogLevel:         logger.LogAll,
 		HeartbeatTimeout: 90,
-		WriterBufferSize: 4096,
-		ReaderBufferSize: 4096,
+		WriterBufferSize: 1024 * 4,
+		ReaderBufferSize: 1024 * 4,
 		WriterTimeout:    time.Millisecond * 40,
-		ReaderTimeout:    time.Millisecond * 40,
+		ReaderTimeout:    time.Microsecond * 10,
 	}
 	handler := &frontier.Handler{
 		OnRequest:       nil,
@@ -41,9 +41,12 @@ func main() {
 		OnOpen: func(conn frontier.Conn) error {
 			return nil
 		},
-		OnMessage: func(message *frontier.Message) {
+		OnMessage: func(conn frontier.Conn, message []byte) {
 			messageCounter++
-			fmt.Println(message.Payload)
+			if string(message) != "ping1" {
+				fmt.Println(string(message))
+				panic("not ping1")
+			}
 		},
 		OnClose: func(conn frontier.Conn) {
 		},

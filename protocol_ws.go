@@ -7,7 +7,6 @@ import (
 	"github.com/gobwas/ws/wsutil"
 	"github.com/golang/glog"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"runtime"
@@ -20,6 +19,7 @@ var _ Protocol = &ProtocolWs{}
 const (
 	wsConnStateIsFreeing = iota
 	wsConnStateIsBusying
+	wsConnStateIsClosing
 	wsConnStateWasClosed
 )
 
@@ -46,7 +46,9 @@ type WsConn struct {
 	readerBufferN      int64
 	readerProcessCount int64
 	readerProcessTime  time.Time
+	readerEventTime    time.Time
 
+	frameOpCode        ws.OpCode
 	frameLength        int64
 	frameHeaderLength  int64
 	framePayloadLength int64
@@ -68,13 +70,15 @@ type ProtocolWs struct {
 	DynamicParams *DynamicParams
 	Handler       *Handler
 
-	connectionsMutex sync.Mutex
-	connections      map[int]*WsConn
-	reader           chan *WsConn
-	delay1m          chan *WsConn
+	connectionsRWMutex sync.RWMutex
+	connections        map[int]*WsConn
+	reader             chan *WsConn
+	delay1m            chan *WsConn
 
 	MessageCount int
-	onMessage    chan *Message
+
+	// 读取到的数据，会打包成message格式，投放到channel
+	messages chan *Message
 }
 
 const (
@@ -170,15 +174,6 @@ func ParseHeader(bts []byte) (h ws.Header, err error) {
 	return
 }
 
-func (p *ProtocolWs) OnMessage() chan *Message {
-	return p.onMessage
-}
-
-func (p *ProtocolWs) close(wsConn *WsConn) {
-	wsConn.state = wsConnStateWasClosed
-	p.Frontier.eventPush(ConnEventTypeDelete, wsConn.conn)
-}
-
 func (p *ProtocolWs) newBuffer() []byte {
 	size := p.DynamicParams.ReaderBufferSize
 	buffer := make([]byte, size)
@@ -205,9 +200,6 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 	}()
 
 	p.reader = make(chan *WsConn, p.Frontier.MaxConnections+10000)
-	p.onMessage = make(chan *Message, 100000)
-
-	readDeadLine := time.Microsecond * 10
 
 	for i := 0; i < runtime.NumCPU(); i++ {
 		go func() {
@@ -229,7 +221,7 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 					wsConn.readerProcessCount = 0
 					goto Loop
 				case wsReaderStateToReadHeader:
-					if err := netConn.SetReadDeadline(time.Now().Add(readDeadLine)); err != nil {
+					if err := netConn.SetReadDeadline(time.Now().Add(p.DynamicParams.ReaderTimeout)); err != nil {
 						glog.Errorln(err)
 						continue
 					}
@@ -237,18 +229,16 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 					n, err := netConn.Read(buf)
 					if err != nil {
 						if err == io.EOF {
-							p.close(wsConn)
+							p.OnEOF(wsConn)
 							continue
 						}
 					}
 					wsConn.readerBufferN += int64(n)
 
 					if wsConn.readerBufferN == 0 {
-						if wsConn.readerProcessCount > 300 {
-							wsConn.readerProcessCount = 0
+						if time.Now().Sub(wsConn.readerEventTime) > time.Millisecond*200 {
 							wsConn.readerRelease()
 						} else {
-							wsConn.readerProcessCount++
 							wsConn.readerProcessTime = time.Now()
 							p.delay1m <- wsConn
 						}
@@ -288,7 +278,7 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 					wsConn.readerState = wsReaderStateToReadHeaderExtra
 					goto Loop
 				case wsReaderStateToReadHeaderExtra:
-					if err := netConn.SetReadDeadline(time.Now().Add(readDeadLine)); err != nil {
+					if err := netConn.SetReadDeadline(time.Now().Add(p.DynamicParams.ReaderTimeout)); err != nil {
 						glog.Errorln(err)
 						continue
 					}
@@ -296,7 +286,7 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 					n, err := netConn.Read(buf)
 					if err != nil {
 						if err == io.EOF {
-							p.close(wsConn)
+							p.OnEOF(wsConn)
 							continue
 						}
 					}
@@ -343,7 +333,7 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 					p.reader <- wsConn
 					break
 				case wsReaderStateToReadPayload:
-					if err := netConn.SetReadDeadline(time.Now().Add(readDeadLine)); err != nil {
+					if err := netConn.SetReadDeadline(time.Now().Add(p.DynamicParams.ReaderTimeout)); err != nil {
 						glog.Errorln(err)
 						continue
 					}
@@ -351,12 +341,11 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 					n, err := netConn.Read(buf)
 					if err != nil {
 						if err == io.EOF {
-							p.close(wsConn)
+							p.OnEOF(wsConn)
 							continue
 						}
 					}
 					wsConn.readerBufferN += int64(n)
-
 					if wsConn.readerBufferN >= wsConn.framePayloadLength {
 						wsConn.readerState = wsReaderStateToParsePayload
 						goto Loop
@@ -372,14 +361,22 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 						}
 						wsConn.dataPack = append(wsConn.dataPack, payload...)
 					}
+
 					if header.Fin {
 						message := &Message{
 							Conn:    wsConn.conn,
 							OpCode:  header.OpCode,
 							Payload: wsConn.dataPack,
 						}
-						p.onMessage <- message
+						p.Frontier.MessageBucket <- message
 						wsConn.dataPack = nil
+
+						switch header.OpCode {
+						case ws.OpClose:
+							wsConn.state = wsConnStateIsClosing
+							// continue，退出此连接的读取操作
+							continue
+						}
 					}
 
 					wsConn.readerBuffer = wsConn.readerBuffer[wsConn.framePayloadLength:]
@@ -442,15 +439,22 @@ func (p *ProtocolWs) OnAccept(conn Conn) error {
 	}.Upgrade(conn.NetConn())
 	return err
 }
-func (p *ProtocolWs) OnClose(netConn net.Conn) error {
-	if err := netConn.SetWriteDeadline(time.Now().Add(p.DynamicParams.WriterTimeout)); err != nil {
-		return err
-	}
-	w := wsutil.NewWriter(netConn, ws.StateServerSide, ws.OpClose)
-	if _, err := w.Write([]byte("close")); err != nil {
-		return err
-	}
-	return w.Flush()
+
+// 读取到完整的数据报，会缓存到
+func (p *ProtocolWs) OnMessage() chan *Message {
+	return p.messages
+}
+
+// 读取通道信息的时候，遇到EOF
+func (p *ProtocolWs) OnEOF(wsConn *WsConn) {
+	wsConn.state = wsConnStateIsClosing
+	p.Frontier.onClose(wsConn.conn)
+}
+
+func (p *ProtocolWs) OnClose(conn *conn) {
+	p.connectionsRWMutex.Lock()
+	defer p.connectionsRWMutex.Unlock()
+	delete(p.connections, conn.id)
 }
 
 func (p *ProtocolWs) Writer(netConn net.Conn, message []byte) error {
@@ -463,18 +467,43 @@ func (p *ProtocolWs) Writer(netConn net.Conn, message []byte) error {
 	}
 	return w.Flush()
 }
-func (p *ProtocolWs) Reader(conn *conn) {
-	p.connectionsMutex.Lock()
-	wsConn, ok := p.connections[conn.GetId()]
-	if !ok {
-		wsConn = &WsConn{conn: conn}
-		p.connections[conn.GetId()] = wsConn
-	}
-	p.connectionsMutex.Unlock()
 
+func (p *ProtocolWs) Reader(conn *conn) {
+	p.connectionsRWMutex.RLock()
+	wsConn, ok := p.connections[conn.id]
+	p.connectionsRWMutex.RUnlock()
+	if !ok {
+		p.connectionsRWMutex.Lock()
+		wsConn, ok = p.connections[conn.id]
+		if !ok {
+			wsConn = &WsConn{
+				conn: conn,
+				//state:              0,
+				//stateMutex:         sync.Mutex{},
+				//header:             nil,
+				//readerState:        0,
+				//readerBuffer:       nil,
+				//readerBufferN:      0,
+				//readerProcessCount: 0,
+				//readerProcessTime:  time.Time{},
+				//readerEventTime:    time.Time{},
+				//frameOpCode:        0,
+				//frameLength:        0,
+				//frameHeaderLength:  0,
+				//framePayloadLength: 0,
+				//dataPack:           nil,
+			}
+		}
+		p.connectionsRWMutex.Unlock()
+	}
+
+	// To check the wsConn state is valid or not
 	if wsConn.state != wsConnStateIsFreeing {
 		return
 	}
+
+	// To update the last event time
+	wsConn.readerEventTime = time.Now()
 
 	ok = false
 	wsConn.stateMutex.Lock()
@@ -487,34 +516,6 @@ func (p *ProtocolWs) Reader(conn *conn) {
 		return
 	}
 
+	// push task
 	p.reader <- wsConn
-}
-
-func (p *ProtocolWs) ReaderOld(netConn net.Conn) (message []byte, err error) {
-	h, r, err := wsutil.NextReader(netConn, ws.StateServerSide)
-	if err != nil {
-		return
-	}
-
-	if h.OpCode.IsControl() {
-		if h.OpCode == ws.OpPing {
-			err = netConn.SetWriteDeadline(time.Now().Add(p.DynamicParams.WriterTimeout))
-			if err != nil {
-				return
-			}
-			w := wsutil.NewControlWriter(netConn, ws.StateServerSide, ws.OpPong)
-			if _, e := w.Write(nil); e != nil {
-				err = e
-			}
-			if e := w.Flush(); e != nil {
-				err = e
-			}
-			return
-		}
-		err = wsutil.ControlFrameHandler(netConn, ws.StateServerSide)(h, r)
-		return
-	}
-
-	message, err = ioutil.ReadAll(r)
-	return
 }

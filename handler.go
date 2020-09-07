@@ -8,6 +8,6 @@ type Handler struct {
 	OnHeader        func(conn Conn, key, value []byte) error
 	OnBeforeUpgrade func(conn Conn) (header ws.HandshakeHeader, err error)
 	OnOpen          func(conn Conn) error
-	OnMessage       func(message *Message)
+	OnMessage       func(conn Conn, message []byte)
 	OnClose         func(conn Conn)
 }
