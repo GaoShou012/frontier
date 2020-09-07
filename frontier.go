@@ -100,7 +100,7 @@ func (f *Frontier) Start() error {
 		defer func() {
 			if err != nil {
 				if err := netConn.Close(); err != nil {
-					logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel,err)
+					logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
 				}
 			}
 		}()
@@ -170,6 +170,11 @@ func (f *Frontier) onOpen(procNum int, size int) {
 				// But we want to reuse previously spawned goroutine.
 				//f.poller.StartReader(conn.desc, conn)
 				err := f.poller.Start(conn.desc, func(event netpoll.Event) {
+					if event == (netpoll.EventRead | netpoll.EventReadHup) {
+						f.onClose(conn)
+						return
+					}
+
 					if !conn.IsWorking() {
 						return
 					}
@@ -185,6 +190,7 @@ func (f *Frontier) onOpen(procNum int, size int) {
 	}
 }
 func (f *Frontier) onMessage() {
+	f.MessageBucket = make(chan *Message, f.MaxConnections)
 	for i := 0; i < runtime.NumCPU(); i++ {
 		go func() {
 			for {

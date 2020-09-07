@@ -43,10 +43,7 @@ func main() {
 		},
 		OnMessage: func(conn frontier.Conn, message []byte) {
 			messageCounter++
-			if string(message) != "ping1" {
-				fmt.Println(string(message))
-				panic("not ping1")
-			}
+			fmt.Println(message)
 		},
 		OnClose: func(conn frontier.Conn) {
 		},

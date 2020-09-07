@@ -14,10 +14,6 @@ type EpollEvent uint32
 type Events struct {
 	Fd    int
 	Event EpollEvent
-	Ctx   interface{}
-}
-
-type FdContext struct {
 }
 
 // EpollEvents that are mapped to epoll_event.events possible values.
@@ -73,9 +69,6 @@ type Epoll struct {
 	//callbacks map[int]func(EpollEvent)
 	callbacks map[int]func(EpollEvent)
 	events    chan *Events
-
-	fdContext map[int]interface{}
-	contexts  map[int]interface{}
 }
 
 // EpollConfig contains options for Epoll instance configuration.
@@ -127,7 +120,6 @@ func EpollCreate(c *EpollConfig) (*Epoll, error) {
 		eventFd:   eventFd,
 		callbacks: make(map[int]func(EpollEvent)),
 		waitDone:  make(chan struct{}),
-		fdContext: make(map[int]interface{}),
 	}
 
 	// Run wait loop.
@@ -201,26 +193,6 @@ func (ep *Epoll) Add(fd int, events EpollEvent, cb func(EpollEvent)) (err error)
 		return ErrRegistered
 	}
 	ep.callbacks[fd] = cb
-
-	return unix.EpollCtl(ep.fd, unix.EPOLL_CTL_ADD, fd, ev)
-}
-
-func (ep *Epoll) AddReader(fd int, events EpollEvent, ctx interface{}) (err error) {
-	ev := &unix.EpollEvent{
-		Events: uint32(events),
-		Fd:     int32(fd),
-	}
-
-	ep.mu.Lock()
-	defer ep.mu.Unlock()
-
-	if ep.closed {
-		return ErrClosed
-	}
-	if _, has := ep.fdContext[fd]; has {
-		return ErrRegistered
-	}
-	ep.fdContext[fd] = ctx
 
 	return unix.EpollCtl(ep.fd, unix.EPOLL_CTL_ADD, fd, ev)
 }

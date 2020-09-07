@@ -18,7 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var addr = flag.String("addr", "192.168.56.101:1234", "http service address")
+var addr = flag.String("addr", "192.168.56.102:1234", "http service address")
 var times = flag.Int("times", 1, "loop times")
 
 func main() {

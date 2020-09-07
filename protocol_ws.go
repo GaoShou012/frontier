@@ -77,8 +77,8 @@ type ProtocolWs struct {
 
 	MessageCount int
 
-	// 读取到的数据，会打包成message格式，投放到channel
-	messages chan *Message
+	onPing chan *WsConn
+	onPong chan *WsConn
 }
 
 const (
@@ -185,6 +185,31 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 	p.DynamicParams = params
 	p.Handler = handler
 	p.connections = make(map[int]*WsConn)
+
+	p.onPing = make(chan *WsConn, 100000)
+	p.onPong = make(chan *WsConn, 100000)
+	go func() {
+		for {
+			select {
+			case wsConn := <-p.onPing:
+				netConn := wsConn.conn.netConn
+				if err := netConn.SetWriteDeadline(time.Now().Add(p.DynamicParams.WriterTimeout)); err != nil {
+					glog.Errorln(err)
+					continue
+				}
+				netConn.Write(ws.CompiledPong)
+				break
+			case wsConn := <-p.onPong:
+				netConn := wsConn.conn.netConn
+				if err := netConn.SetWriteDeadline(time.Now().Add(p.DynamicParams.WriterTimeout)); err != nil {
+					glog.Errorln(err)
+					continue
+				}
+				netConn.Write(ws.CompiledPing)
+				break
+			}
+		}
+	}()
 
 	go func() {
 		p.delay1m = make(chan *WsConn, 1000000)
@@ -370,11 +395,15 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 						}
 						p.Frontier.MessageBucket <- message
 						wsConn.dataPack = nil
-
 						switch header.OpCode {
+						case ws.OpPing:
+							p.onPing <- wsConn
+							break
+						case ws.OpPong:
+							p.onPong <- wsConn
+							break
 						case ws.OpClose:
 							wsConn.state = wsConnStateIsClosing
-							// continue，退出此连接的读取操作
 							continue
 						}
 					}
@@ -440,11 +469,6 @@ func (p *ProtocolWs) OnAccept(conn Conn) error {
 	return err
 }
 
-// 读取到完整的数据报，会缓存到
-func (p *ProtocolWs) OnMessage() chan *Message {
-	return p.messages
-}
-
 // 读取通道信息的时候，遇到EOF
 func (p *ProtocolWs) OnEOF(wsConn *WsConn) {
 	wsConn.state = wsConnStateIsClosing
@@ -493,10 +517,11 @@ func (p *ProtocolWs) Reader(conn *conn) {
 				//framePayloadLength: 0,
 				//dataPack:           nil,
 			}
+			p.connections[conn.id] = wsConn
 		}
 		p.connectionsRWMutex.Unlock()
 	}
-
+	fmt.Println(wsConn)
 	// To check the wsConn state is valid or not
 	if wsConn.state != wsConnStateIsFreeing {
 		return
