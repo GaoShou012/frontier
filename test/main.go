@@ -43,7 +43,6 @@ func main() {
 		},
 		OnMessage: func(conn frontier.Conn, message []byte) {
 			messageCounter++
-			fmt.Println(message)
 		},
 		OnClose: func(conn frontier.Conn) {
 		},

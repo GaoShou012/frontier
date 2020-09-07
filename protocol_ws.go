@@ -247,7 +247,7 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 					goto Loop
 				case wsReaderStateToReadHeader:
 					if err := netConn.SetReadDeadline(time.Now().Add(p.DynamicParams.ReaderTimeout)); err != nil {
-						glog.Errorln(err)
+						p.OnEOF(wsConn)
 						continue
 					}
 					buf := wsConn.readerBuffer[wsConn.readerBufferN:]
@@ -304,7 +304,7 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 					goto Loop
 				case wsReaderStateToReadHeaderExtra:
 					if err := netConn.SetReadDeadline(time.Now().Add(p.DynamicParams.ReaderTimeout)); err != nil {
-						glog.Errorln(err)
+						p.OnEOF(wsConn)
 						continue
 					}
 					buf := wsConn.readerBuffer[wsConn.readerBufferN:]
@@ -359,7 +359,7 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 					break
 				case wsReaderStateToReadPayload:
 					if err := netConn.SetReadDeadline(time.Now().Add(p.DynamicParams.ReaderTimeout)); err != nil {
-						glog.Errorln(err)
+						p.OnEOF(wsConn)
 						continue
 					}
 					buf := wsConn.readerBuffer[wsConn.readerBufferN:]
@@ -521,7 +521,7 @@ func (p *ProtocolWs) Reader(conn *conn) {
 		}
 		p.connectionsRWMutex.Unlock()
 	}
-	fmt.Println(wsConn)
+
 	// To check the wsConn state is valid or not
 	if wsConn.state != wsConnStateIsFreeing {
 		return
