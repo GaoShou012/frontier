@@ -19,16 +19,16 @@ import (
 )
 
 func main() {
-	id := uuid.NewV4().String()
+    id := uuid.NewV4().String()
 	addr := ":1234"
 	maxConnections := 1000000
 	dynamicParams := &frontier.DynamicParams{
 		LogLevel:         logger.LogAll,
 		HeartbeatTimeout: 90,
-		WriterBufferSize: 1024,
-		ReaderBufferSize: 1024,
-		WriterTimeout:    time.Millisecond * 10,
-		ReaderTimeout:    time.Millisecond * 10,
+		WriterBufferSize: 1024 * 4,
+		ReaderBufferSize: 1024 * 4,
+		WriterTimeout:    time.Millisecond * 40,
+		ReaderTimeout:    time.Microsecond * 10,
 	}
 	handler := &frontier.Handler{
 		OnRequest:       nil,
@@ -39,7 +39,8 @@ func main() {
 			return nil
 		},
 		OnMessage: func(conn frontier.Conn, message []byte) {
-			fmt.Println(string(message))
+			messageCounter++
+			fmt.Println(message)
 		},
 		OnClose: func(conn frontier.Conn) {
 		},
