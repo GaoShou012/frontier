@@ -154,13 +154,16 @@ func (f *Frontier) onOpen(procNum int, size int) {
 			for {
 				conn := <-f.onOpenCache
 
-				if err := f.Handler.OnOpen(conn); err != nil {
-					logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
-					if err := conn.NetConn().Close(); err != nil {
+				if f.Handler.OnOpen != nil {
+					if err := f.Handler.OnOpen(conn); err != nil {
 						logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
+						if err := conn.NetConn().Close(); err != nil {
+							logger.Compare(logger.LogWarning, f.DynamicParams.LogLevel, err)
+						}
+						continue
 					}
-					continue
 				}
+
 				f.eventPush(ConnEventTypeInsert, conn)
 
 				// Here we can read some new message from connection.

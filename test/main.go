@@ -34,7 +34,9 @@ func main() {
 		ReaderTimeout:    time.Microsecond * 10,
 	}
 	handler := &frontier.Handler{
-		OnRequest:       nil,
+		OnRequest: func(conn frontier.Conn, uri []byte) error {
+			return nil
+		},
 		OnHost:          nil,
 		OnHeader:        nil,
 		OnBeforeUpgrade: nil,
