@@ -7,6 +7,7 @@ import (
 	"github.com/GaoShou012/tools/ider"
 	"github.com/GaoShou012/tools/logger"
 	"github.com/gobwas/ws"
+	uuid "github.com/satori/go.uuid"
 	"net"
 	"runtime"
 	"sync"
@@ -123,6 +124,7 @@ func (f *Frontier) Start() error {
 			frontier:       f,
 			protocol:       f.Protocol,
 			id:             id,
+			uuid:           uuid.NewV4().String(),
 			state:          0,
 			netConn:        netConn,
 			context:        nil,
@@ -130,6 +132,7 @@ func (f *Frontier) Start() error {
 			deadline:       0,
 			desc:           nil,
 		}
+		conn.Init()
 		err = f.Protocol.OnAccept(conn)
 		if err != nil {
 			return

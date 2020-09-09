@@ -17,6 +17,7 @@ const (
 type Conn interface {
 	Frontier() *Frontier
 	GetId() int
+	GetUuid() string
 	GetState() int
 	GetConnectionTime() time.Time
 	SetContext(ctx interface{})
@@ -29,6 +30,7 @@ var _ Conn = &conn{}
 
 type conn struct {
 	id           int
+	uuid         string
 	state        int
 	stateRWMutex sync.RWMutex
 	broken       bool
@@ -43,8 +45,7 @@ type conn struct {
 	protocol Protocol
 }
 
-func (c *conn) Init() {
-}
+func (c *conn) Init() {}
 
 func (c *conn) IsWorking() bool {
 	c.stateRWMutex.RLock()
@@ -66,6 +67,9 @@ func (c *conn) Frontier() *Frontier {
 }
 func (c *conn) GetId() int {
 	return c.id
+}
+func (c *conn) GetUuid() string {
+	return c.uuid
 }
 func (c *conn) GetState() int {
 	return c.state
