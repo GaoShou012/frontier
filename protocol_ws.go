@@ -75,10 +75,10 @@ type ProtocolWs struct {
 	reader             chan *WsConn
 	delay1m            chan *WsConn
 
-	MessageCount int
-
 	onPing chan *WsConn
 	onPong chan *WsConn
+
+	MessageType ws.OpCode
 }
 
 const (
@@ -485,7 +485,7 @@ func (p *ProtocolWs) Writer(netConn net.Conn, message []byte) error {
 	if err := netConn.SetWriteDeadline(time.Now().Add(p.DynamicParams.WriterTimeout)); err != nil {
 		return err
 	}
-	w := wsutil.NewWriter(netConn, ws.StateServerSide, ws.OpText)
+	w := wsutil.NewWriter(netConn, ws.StateServerSide, p.MessageType)
 	if _, err := w.Write(message); err != nil {
 		return err
 	}

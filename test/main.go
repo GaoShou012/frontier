@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/GaoShou012/frontier"
 	"github.com/GaoShou012/tools/logger"
+	"github.com/gobwas/ws"
 	"github.com/golang/glog"
 	uuid "github.com/satori/go.uuid"
 	"os"
@@ -55,7 +56,7 @@ func main() {
 		Addr:           addr,
 		MaxConnections: maxConnections,
 		DynamicParams:  dynamicParams,
-		Protocol:       &frontier.ProtocolWs{},
+		Protocol:       &frontier.ProtocolWs{MessageType: ws.OpBinary},
 		Handler:        handler,
 	}
 	if err := f.Init(); err != nil {
