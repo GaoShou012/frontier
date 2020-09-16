@@ -125,7 +125,7 @@ func (f *Frontier) Start() error {
 			protocol:       f.Protocol,
 			id:             id,
 			uuid:           uuid.NewV4().String(),
-			state:          0,
+			state:          connStateIsNothing,
 			netConn:        netConn,
 			context:        nil,
 			connectionTime: time.Now(),
@@ -313,7 +313,12 @@ func (f *Frontier) eventHandler() {
 						if conn.deadline > deadline {
 							break
 						}
+						connections.Remove(ele)
+
 						f.onClose(conn)
+						if f.DynamicParams.LogLevel >= logger.LogInfo {
+							logger.Println(logger.LogInfo, "Conn Deadline", conn)
+						}
 					}
 					break
 				case event, ok := <-events:
@@ -322,6 +327,9 @@ func (f *Frontier) eventHandler() {
 
 					switch event.Type {
 					case ConnEventTypeInsert:
+						if f.DynamicParams.LogLevel >= logger.LogInfo {
+							logger.Println(logger.LogInfo, "ConnEventTypeInsert", conn)
+						}
 						if conn.state == connStateIsNothing {
 							conn.state = connStateIsWorking
 						} else {
@@ -331,6 +339,9 @@ func (f *Frontier) eventHandler() {
 						anchors[connId] = anchor
 						break
 					case ConnEventTypeDelete:
+						if f.DynamicParams.LogLevel >= logger.LogInfo {
+							logger.Println(logger.LogInfo, "ConnEventTypeDelete", conn)
+						}
 						if conn.state == connStateIsClosing {
 							conn.state = connStateWasClosed
 						} else {

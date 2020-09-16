@@ -36,7 +36,7 @@ func main() {
 	maxConnections := 1000000
 	dynamicParams := &frontier.DynamicParams{
 		LogLevel:         logger.LogAll,
-		HeartbeatTimeout: 90,
+		HeartbeatTimeout: 10,
 		WriterBufferSize: 1024 * 4,
 		ReaderBufferSize: 1024 * 4,
 		WriterTimeout:    time.Millisecond * 40,
@@ -74,7 +74,7 @@ func main() {
 		Addr:           addr,
 		MaxConnections: maxConnections,
 		DynamicParams:  dynamicParams,
-		Protocol:       &frontier.ProtocolWs{MessageType: ws.OpBinary},
+		Protocol:       &frontier.ProtocolWs{MessageType: ws.OpText},
 		Handler:        handler,
 	}
 	if err := f.Init(); err != nil {
