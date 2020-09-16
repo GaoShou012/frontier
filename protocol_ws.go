@@ -295,7 +295,9 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 					// To check the space that is there enough for frame's header
 					if int64(len(wsConn.readerBuffer)) < wsConn.frameHeaderLength {
 						buf := p.newBuffer()
-						copy(buf, wsConn.readerBuffer)
+						if wsConn.readerBufferN > 0 {
+							copy(buf, wsConn.readerBuffer)
+						}
 						wsConn.readerBuffer = buf
 					}
 
@@ -350,6 +352,9 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 						if int64(len(buf)) < wsConn.framePayloadLength {
 							panic("buf size error")
 						}
+						if wsConn.readerBufferN > 0 {
+							copy(buf, wsConn.readerBuffer)
+						}
 						wsConn.readerBuffer = buf
 					}
 
@@ -386,7 +391,6 @@ func (p *ProtocolWs) OnInit(frontier *Frontier, params *DynamicParams, handler *
 						}
 						wsConn.dataPack = append(wsConn.dataPack, payload...)
 					}
-
 					if header.Fin {
 						message := &Message{
 							Conn:    wsConn.conn,

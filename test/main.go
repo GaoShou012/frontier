@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/GaoShou012/frontier"
 	"github.com/GaoShou012/tools/logger"
@@ -12,6 +13,13 @@ import (
 	"syscall"
 	"time"
 )
+
+type Message struct {
+	Type        string
+	Content     string
+	ContentType string
+	ClientMsgId int
+}
 
 func main() {
 	messageCounter := 0
@@ -45,7 +53,17 @@ func main() {
 			return nil
 		},
 		OnMessage: func(conn frontier.Conn, message []byte) {
+			//fmt.Println("count", len(message))
+			msg := &Message{}
+			err := json.Unmarshal(message, msg)
+			if err != nil {
+				fmt.Println(message)
+				glog.Errorln(string(message))
+				glog.Errorln(err)
+				os.Exit(1)
+			}
 			messageCounter++
+			conn.Sender([]byte("ok"))
 		},
 		OnClose: func(conn frontier.Conn) {
 		},
