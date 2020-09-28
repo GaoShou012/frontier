@@ -15,12 +15,14 @@ import (
 )
 
 type Frontier struct {
-	Id             string
-	Addr           string
-	MaxConnections int
-	DynamicParams  *DynamicParams
-	Handler        *Handler
-	Protocol       Protocol
+	Id              string
+	Addr            string
+	MaxConnections  int
+	DynamicParams   *DynamicParams
+	Handler         *Handler
+	Protocol        Protocol
+	SenderParallel  int
+	SenderCacheSize int
 
 	ider   *ider.IdPool
 	ln     net.Listener
@@ -69,7 +71,7 @@ func (f *Frontier) Init() error {
 
 	// init sender
 	f.sender = &sender{}
-	f.sender.init(2, 100000, f.DynamicParams)
+	f.sender.init(f.SenderParallel, f.SenderCacheSize, f.DynamicParams)
 
 	f.eventHandler()
 	f.onOpen(runtime.NumCPU()*10, 100000)
