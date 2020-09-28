@@ -70,12 +70,14 @@ func main() {
 	}
 
 	f := &frontier.Frontier{
-		Id:             id,
-		Addr:           addr,
-		MaxConnections: maxConnections,
-		DynamicParams:  dynamicParams,
-		Protocol:       &frontier.ProtocolWs{MessageType: ws.OpText},
-		Handler:        handler,
+		Id:              id,
+		Addr:            addr,
+		MaxConnections:  maxConnections,
+		DynamicParams:   dynamicParams,
+		Protocol:        &frontier.ProtocolWs{MessageType: ws.OpText},
+		Handler:         handler,
+		SenderParallel:  100,
+		SenderCacheSize: 10000,
 	}
 	if err := f.Init(); err != nil {
 		panic(err)
