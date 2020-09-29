@@ -36,6 +36,7 @@ func (s *sender) init(parallel int, cacheSize int, params *DynamicParams) {
 						if time.Now().Sub(c.senderErrorTime) < time.Second*5 {
 						} else {
 							c.senderIsError = false
+							ConnectionsOfWritingTimeout.Dec()
 							goto Again
 						}
 					} else {
@@ -43,6 +44,7 @@ func (s *sender) init(parallel int, cacheSize int, params *DynamicParams) {
 						if err != nil {
 							c.senderIsError = true
 							c.senderErrorTime = time.Now()
+							ConnectionsOfWritingTimeout.Inc()
 							if s.params.LogLevel >= logger.LogWarning {
 								logger.Println(logger.LogWarning, err)
 							}

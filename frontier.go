@@ -339,6 +339,7 @@ func (f *Frontier) eventHandler() {
 						}
 						anchor := connections.PushBack(conn)
 						anchors[connId] = anchor
+						Connections.Inc()
 						break
 					case ConnEventTypeDelete:
 						if f.DynamicParams.LogLevel >= logger.LogInfo {
@@ -358,6 +359,11 @@ func (f *Frontier) eventHandler() {
 						connections.Remove(anchor)
 
 						f.ider.Put(connId)
+
+						if conn.senderIsError {
+							ConnectionsOfWritingTimeout.Dec()
+						}
+						Connections.Dec()
 						break
 					case ConnEventTypeUpdate:
 						if conn.state != connStateIsWorking {
