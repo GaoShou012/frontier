@@ -27,11 +27,11 @@ type room struct {
 }
 
 func (r *room) init() {
-
 	r.connections = make(map[int]frontier.Conn)
 	r.broadcast = make(chan []byte, 100000)
 	r.joinEvent = make(chan frontier.Conn, 100000)
 	r.leaveEvent = make(chan frontier.Conn, 100000)
+
 	go func() {
 		for {
 			select {
@@ -61,7 +61,7 @@ func main() {
 	r := &room{}
 	r.init()
 
-	//go Prometheus(":9090")
+	go Prometheus(":9090")
 
 	MessageOnQueue = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "room",

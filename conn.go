@@ -47,7 +47,16 @@ type conn struct {
 
 	senderIsError   bool
 	senderErrorTime time.Time
-	senderCache     list.List
+	senderCache     chan []byte
+	senderLock      sync.Mutex
+	senderRWMute    sync.RWMutex
+	sender          struct {
+		enable  bool
+		wakeup  chan bool
+		mutex   sync.Mutex
+		counter int
+		cache   list.List
+	}
 }
 
 func (c *conn) Init() {}
@@ -92,5 +101,20 @@ func (c *conn) NetConn() net.Conn {
 	return c.netConn
 }
 func (c *conn) Sender(message []byte) {
-	c.frontier.sender.push(c, message)
+	c.sender.mutex.Lock()
+	counter := c.sender.counter
+	c.sender.counter++
+	c.sender.mutex.Unlock()
+
+	if c.sender.enable == false {
+		return
+	}
+
+	c.sender.cache.PushBack(message)
+
+	if counter == 0 {
+		c.sender.wakeup <- true
+	}
+
+	//c.frontier.sender.push(c, message)
 }
