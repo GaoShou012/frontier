@@ -486,14 +486,19 @@ func (p *ProtocolWs) OnClose(conn *conn) {
 }
 
 func (p *ProtocolWs) Writer(netConn net.Conn, message []byte) error {
-	if err := netConn.SetWriteDeadline(time.Now().Add(p.DynamicParams.WriterTimeout)); err != nil {
+	var err error
+	err = netConn.SetWriteDeadline(time.Now().Add(p.DynamicParams.WriterTimeout))
+	if err != nil {
 		return err
 	}
 	w := wsutil.NewWriter(netConn, ws.StateServerSide, p.MessageType)
-	if _, err := w.Write(message); err != nil {
-		return err
+	if _, e := w.Write(message); e != nil {
+		err = e
 	}
-	return w.Flush()
+	if e := w.Flush(); e != nil {
+		err = e
+	}
+	return err
 }
 
 func (p *ProtocolWs) Reader(conn *conn) {

@@ -1,6 +1,7 @@
 package frontier
 
 import (
+	"container/list"
 	"github.com/GaoShou012/frontier/netpoll"
 	"net"
 	"sync"
@@ -43,6 +44,10 @@ type conn struct {
 	desc     *netpoll.Desc
 	frontier *Frontier
 	protocol Protocol
+
+	senderIsError   bool
+	senderErrorTime time.Time
+	senderCache     list.List
 }
 
 func (c *conn) Init() {}
