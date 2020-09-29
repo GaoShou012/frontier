@@ -43,7 +43,6 @@ func (s *sender) init(parallel int, cacheSize int, params *DynamicParams) {
 						if err != nil {
 							c.senderIsError = true
 							c.senderErrorTime = time.Now()
-							c.senderCache.PushBack(message)
 							if s.params.LogLevel >= logger.LogWarning {
 								logger.Println(logger.LogWarning, err)
 							}
