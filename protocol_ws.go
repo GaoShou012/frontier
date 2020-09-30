@@ -501,6 +501,21 @@ func (p *ProtocolWs) Writer(netConn net.Conn, message []byte) error {
 	return err
 }
 
+func (p *ProtocolWs) Sender(conn *conn) {
+	go func() {
+		conn.sender.cache = make(chan []byte, 100)
+		conn.sender.enable = true
+		for {
+			message, ok := <-conn.sender.cache
+			if !ok {
+				return
+			}
+			p.Writer(conn.netConn, message)
+			conn.sender.counter--
+		}
+	}()
+}
+
 func (p *ProtocolWs) Reader(conn *conn) {
 	p.connectionsRWMutex.RLock()
 	wsConn, ok := p.connections[conn.id]
@@ -525,6 +540,7 @@ func (p *ProtocolWs) Reader(conn *conn) {
 				//frameHeaderLength:  0,
 				//framePayloadLength: 0,
 				//dataPack:           nil,
+
 			}
 			p.connections[conn.id] = wsConn
 		}

@@ -7,8 +7,6 @@ import (
 	"github.com/GaoShou012/tools/ider"
 	"github.com/GaoShou012/tools/logger"
 	"github.com/gobwas/ws"
-	"github.com/gobwas/ws/wsutil"
-	"github.com/golang/glog"
 	uuid "github.com/satori/go.uuid"
 	"net"
 	"runtime"
@@ -135,8 +133,6 @@ func (f *Frontier) Start() error {
 			connectionTime: time.Now(),
 			deadline:       0,
 			desc:           nil,
-
-			senderCache: make(chan []byte, 1000),
 		}
 		conn.Init()
 		err = f.Protocol.OnAccept(conn)
@@ -174,30 +170,6 @@ func (f *Frontier) onOpen(procNum int, size int) {
 				}
 
 				f.eventPush(ConnEventTypeInsert, conn)
-
-				// sender
-				go func() {
-					fmt.Println("sender")
-					defer func() {
-						fmt.Println("sender exit")
-					}()
-					for {
-						_, ok := <-conn.sender.wakeup
-						if !ok {
-							return
-						}
-
-						w := wsutil.NewWriter(conn.netConn, ws.StateServerSide, ws.OpBinary)
-						if _, err := w.Write(message); err != nil {
-							glog.Errorln(err)
-							return
-						}
-						if err := w.Flush(); err != nil {
-							glog.Errorln(err)
-							return
-						}
-					}
-				}()
 
 				// Here we can read some new message from connection.
 				// We can not read it right here in callback, because then we will
@@ -388,11 +360,7 @@ func (f *Frontier) eventHandler() {
 
 						f.ider.Put(connId)
 
-						close(conn.senderCache)
-
-						if conn.senderIsError {
-							ConnectionsOfWritingTimeout.Dec()
-						}
+						close(conn.sender.cache)
 						Connections.Dec()
 						break
 					case ConnEventTypeUpdate:

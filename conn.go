@@ -1,7 +1,6 @@
 package frontier
 
 import (
-	"container/list"
 	"github.com/GaoShou012/frontier/netpoll"
 	"net"
 	"sync"
@@ -45,17 +44,11 @@ type conn struct {
 	frontier *Frontier
 	protocol Protocol
 
-	senderIsError   bool
-	senderErrorTime time.Time
-	senderCache     chan []byte
-	senderLock      sync.Mutex
-	senderRWMute    sync.RWMutex
-	sender          struct {
+	sender struct {
 		enable  bool
-		wakeup  chan bool
 		mutex   sync.Mutex
 		counter int
-		cache   list.List
+		cache   chan []byte
 	}
 }
 
@@ -102,19 +95,17 @@ func (c *conn) NetConn() net.Conn {
 }
 func (c *conn) Sender(message []byte) {
 	c.sender.mutex.Lock()
-	counter := c.sender.counter
-	c.sender.counter++
-	c.sender.mutex.Unlock()
+	defer c.sender.mutex.Unlock()
 
 	if c.sender.enable == false {
+		ThrowAwayMessage.Inc()
 		return
 	}
-
-	c.sender.cache.PushBack(message)
-
-	if counter == 0 {
-		c.sender.wakeup <- true
+	if c.sender.counter >= 100-10 {
+		ThrowAwayMessage.Inc()
+		return
 	}
-
+	c.sender.counter++
+	c.sender.cache <- message
 	//c.frontier.sender.push(c, message)
 }

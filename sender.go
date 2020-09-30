@@ -3,7 +3,6 @@ package frontier
 import (
 	"github.com/GaoShou012/tools/logger"
 	"sync"
-	"time"
 )
 
 type senderJob struct {
@@ -30,24 +29,30 @@ func (s *sender) init(parallel int, cacheSize int, params *DynamicParams) {
 			for {
 				job := <-s.jobs[i]
 				c, message := job.c, job.message
-			Again:
+
 				if c.state == connStateIsWorking {
-					if c.senderIsError {
-						if time.Now().Sub(c.senderErrorTime) < time.Second*5 {
-						} else {
-							c.senderIsError = false
-							ConnectionsOfWritingTimeout.Dec()
-							goto Again
-						}
-					} else {
-						err := c.protocol.Writer(c.netConn, message)
-						if err != nil {
-							c.senderIsError = true
-							c.senderErrorTime = time.Now()
-							ConnectionsOfWritingTimeout.Inc()
-							if s.params.LogLevel >= logger.LogWarning {
-								logger.Println(logger.LogWarning, err)
-							}
+					//if c.senderIsError {
+					//	if time.Now().Sub(c.senderErrorTime) < time.Second*5 {
+					//	} else {
+					//		c.senderIsError = false
+					//		ConnectionsOfWritingTimeout.Dec()
+					//		goto Again
+					//	}
+					//} else {
+					//	err := c.protocol.Writer(c.netConn, message)
+					//	if err != nil {
+					//		c.senderIsError = true
+					//		c.senderErrorTime = time.Now()
+					//		ConnectionsOfWritingTimeout.Inc()
+					//		if s.params.LogLevel >= logger.LogWarning {
+					//			logger.Println(logger.LogWarning, err)
+					//		}
+					//	}
+					//}
+					err := c.protocol.Writer(c.netConn, message)
+					if err != nil {
+						if s.params.LogLevel >= logger.LogWarning {
+							logger.Println(logger.LogWarning, err)
 						}
 					}
 				} else {
